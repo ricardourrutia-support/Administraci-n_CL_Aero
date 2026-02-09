@@ -3,424 +3,534 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, time, timedelta
 import io
-import re
+import xlsxwriter
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (XLSX)", layout="wide")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (Admin)", layout="wide")
 
-st.title("✈️ Gestor de Turnos y Cobertura (Versión Excel)")
+st.title("✈️ Gestor Avanzado de Turnos y Cobertura")
 st.markdown("""
-Esta aplicación procesa tus archivos **Excel (.xlsx)** originales. 
-Selecciona el mes a analizar y la aplicación intentará adivinar qué hoja del Excel corresponde.
+Esta aplicación genera la **Planificación Mensual (Formato Admin)** y permite gestionar **Ausencias**.
+El sistema recalcula automáticamente las coberturas y detecta necesidades de horas extra (Tarea 4).
 """)
 
-# --- FUNCIONES AUXILIARES ---
+# --- ESTADO DE SESIÓN (PARA AUSENCIAS) ---
+if 'absences' not in st.session_state:
+    st.session_state.absences = []
+
+def add_absence(name, date, reason):
+    st.session_state.absences.append({'Nombre': name, 'Fecha': date, 'Motivo': reason})
+
+def remove_absence(idx):
+    if 0 <= idx < len(st.session_state.absences):
+        st.session_state.absences.pop(idx)
+
+# --- FUNCIONES DE PARSEO ---
 
 def parse_time_range(time_str):
-    """Convierte strings como '09:00 - 20:00' en una lista de horas (0-23)."""
-    if pd.isna(time_str) or str(time_str).lower().strip() in ['libre', 'nan', 'dia libre', 'dias libres', 'l', 'x']:
+    """Convierte '09:00 - 20:00' a lista de horas [9, 10, ..., 19]."""
+    if pd.isna(time_str): return []
+    s = str(time_str).lower().strip()
+    if s in ['libre', 'nan', 'dia libre', 'dias libres', 'l', 'x', 'vacaciones', 'licencia']:
         return []
     
+    # Limpieza
+    s = s.replace(" diurno", "").replace(" nocturno", "").strip()
+    
     try:
-        # Limpieza de texto basura
-        clean_str = str(time_str).lower()
-        clean_str = clean_str.replace(" diurno", "").replace(" nocturno", "").strip()
+        parts = s.split('-')
+        if len(parts) != 2: return []
         
-        # Manejo de formatos variados
-        parts = clean_str.split('-')
-        if len(parts) != 2:
-            return []
+        start_str, end_str = parts[0].strip(), parts[1].strip()
         
-        start_str = parts[0].strip()
-        end_str = parts[1].strip()
+        # Intentar varios formatos
+        fmts = ["%H:%M:%S", "%H:%M", "%H"]
+        start_dt, end_dt = None, None
         
-        formats = ["%H:%M:%S", "%H:%M", "%H"]
+        for fmt in fmts:
+            if not start_dt:
+                try: start_dt = datetime.strptime(start_str, fmt)
+                except: pass
+            if not end_dt:
+                try: end_dt = datetime.strptime(end_str, fmt)
+                except: pass
+                
+        if not start_dt or not end_dt: return []
         
-        start_dt = None
-        end_dt = None
-        
-        for fmt in formats:
-            try:
-                if not start_dt: start_dt = datetime.strptime(start_str, fmt)
-            except: pass
-            try:
-                if not end_dt: end_dt = datetime.strptime(end_str, fmt)
-            except: pass
-            
-        if not start_dt or not end_dt:
-            return []
-            
         start_h = start_dt.hour
         end_h = end_dt.hour
         
-        # Lógica de rango (Ej: 9 a 20)
         if end_h > start_h:
-            hours_covered = list(range(start_h, end_h)) 
-        # Lógica turno noche (Ej: 20 a 07)
-        elif end_h < start_h:
-            hours_covered = list(range(start_h, 24)) + list(range(0, end_h))
+            return list(range(start_h, end_h))
+        elif end_h < start_h: # Turno noche (ej 22 a 06)
+            return list(range(start_h, 24)) + list(range(0, end_h))
         else:
-            hours_covered = [start_h] # Caso raro mismo inicio y fin
+            return [start_h]
             
-        return hours_covered
-        
-    except Exception as e:
+    except:
         return []
 
+def get_shift_type(time_str):
+    """Determina si es Diurno o Nocturno basado en hora inicio."""
+    hours = parse_time_range(time_str)
+    if not hours: return "Libre"
+    start_h = hours[0]
+    # Criterio simple: Si entra entre 05:00 y 14:00 es Diurno
+    if 5 <= start_h < 14:
+        return "Diurno"
+    else:
+        return "Nocturno"
+
 def find_header_row(df, keywords=["nombre", "colaborador", "supervisor", "cargo"]):
-    """Busca en las primeras 10 filas dónde empieza realmente la tabla."""
-    for i in range(min(15, len(df))):
-        row_values = df.iloc[i].astype(str).str.lower().tolist()
-        if any(key in " ".join(row_values) for key in keywords):
+    for i in range(min(20, len(df))):
+        row_str = " ".join(df.iloc[i].astype(str).str.lower())
+        if any(k in row_str for k in keywords):
             return i
     return 0
 
-# --- LECTURA DE EXCEL ---
+# --- CARGA DE DATOS ---
 
-def load_excel_sheet(file, sheet_name, role_type, analysis_month_num, year):
-    """
-    Lee una hoja específica y normaliza los datos.
-    role_type: 'Ejecutivo', 'Coordinador', 'Anfitrion', 'Supervisor'
-    """
-    data_extracted = []
-    
+def load_excel_sheet(file, sheet_name, role_type, month_num, year):
+    data = []
     try:
-        # 1. Leer sin header para inspeccionar
         df_raw = pd.read_excel(file, sheet_name=sheet_name, header=None)
-        
-        # 2. Encontrar la fila de cabecera
-        header_idx = 0
-        if role_type == 'Supervisor':
-            # Supervisores tienen una estructura muy distinta (Días en fila X, Nombres abajo)
-            # Buscamos donde dice "Supervisor"
-            header_idx = find_header_row(df_raw, keywords=["supervisor"])
-        else:
-            # Ejecutivos/Coordinadores/Anfitriones: Buscamos "Nombre" o Fechas
-            header_idx = find_header_row(df_raw, keywords=["nombre", "cargo"])
-            
-        # 3. Releer con la cabecera correcta
+        header_idx = find_header_row(df_raw, ["nombre", "supervisor", "colaborador"])
         df = pd.read_excel(file, sheet_name=sheet_name, header=header_idx)
         
-        # 4. Procesamiento específico por tipo
+        # Identificar columnas
+        cols = df.columns
+        name_col = next((c for c in cols if "nombre" in str(c).lower() or "supervisor" in str(c).lower()), cols[0])
+        
+        # Identificar fechas
+        date_map = {} # {col_name: date_obj}
         
         if role_type == 'Supervisor':
-            # Lógica especial Supervisores (días son columnas numéricas 1, 2, 3...)
-            # Asumimos que la fila anterior al header tenía el Mes, pero usaremos el mes seleccionado por el usuario
-            
-            # Identificar columnas que son números (días del mes)
-            day_cols = []
-            for col in df.columns:
-                if str(col).isdigit():
-                    if 1 <= int(col) <= 31:
-                        day_cols.append(col)
-            
-            # Iterar filas
-            for idx, row in df.iterrows():
-                name = row.iloc[0] # Asumimos columna 0 es Nombre
-                if pd.isna(name) or str(name).lower() in ['supervisor', 'nan']: continue
-                
-                for day in day_cols:
-                    try:
-                        date_str = f"{year}-{analysis_month_num:02d}-{int(day):02d}"
-                        shift = row[day]
-                        data_extracted.append({
-                            'Fecha': date_str,
-                            'Nombre': name,
-                            'Rol': role_type,
-                            'Turno_Raw': shift
-                        })
-                    except: pass
-                    
+            # Supervisores: Días numéricos (1, 2, 3...)
+            for c in cols:
+                if str(c).isdigit():
+                    d = int(c)
+                    if 1 <= d <= 31:
+                        try:
+                            date_obj = datetime(year, month_num, d)
+                            date_map[c] = date_obj
+                        except: pass
         else:
-            # Lógica Ejecutivos, Coordinadores, Anfitriones
-            # Buscan columnas que sean fechas (datetime)
-            
-            cols = df.columns
-            # Identificar columna nombre
-            name_col = cols[0] 
+            # Otros: Fechas datetime o strings
             for c in cols:
-                if "nombre" in str(c).lower():
-                    name_col = c
-                    break
-            
-            date_cols = []
-            for c in cols:
-                # Intentar ver si la columna es una fecha
                 if isinstance(c, (datetime, pd.Timestamp)):
-                     date_cols.append(c)
+                    if c.month == month_num:
+                        date_map[c] = c
                 else:
-                    # Intentar parsear string a fecha
                     try:
-                        pd.to_datetime(c)
-                        date_cols.append(c)
-                    except:
-                        pass
-
-            for idx, row in df.iterrows():
-                name = row[name_col]
-                if pd.isna(name) or "nombre" in str(name).lower(): continue
-                
-                for date_col in date_cols:
-                    shift = row[date_col]
-                    # Convertir fecha de columna a string estandar
-                    try:
-                        d_val = pd.to_datetime(date_col)
-                        # Filtrar solo si coincide con el mes de análisis (para evitar errores de hojas mixtas)
-                        if d_val.month == analysis_month_num:
-                            data_extracted.append({
-                                'Fecha': d_val.strftime("%Y-%m-%d"),
-                                'Nombre': name,
-                                'Rol': role_type,
-                                'Turno_Raw': shift
-                            })
+                        d_obj = pd.to_datetime(c)
+                        if d_obj.month == month_num and d_obj.year == year:
+                            date_map[c] = d_obj
                     except: pass
-
-    except Exception as e:
-        st.error(f"Error procesando hoja '{sheet_name}' para {role_type}: {str(e)}")
         
-    return pd.DataFrame(data_extracted)
+        # Extraer datos
+        for idx, row in df.iterrows():
+            name = row[name_col]
+            if pd.isna(name) or str(name).lower() in ['nombre', 'supervisor', 'cargo', 'nan']: continue
+            
+            for col, date_val in date_map.items():
+                shift = row[col]
+                data.append({
+                    'Fecha': date_val,
+                    'Nombre': name,
+                    'Rol': role_type,
+                    'Turno_Raw': shift
+                })
+                
+    except Exception as e:
+        st.error(f"Error en {sheet_name}: {e}")
+        
+    return pd.DataFrame(data)
 
-# --- MOTOR DE REGLAS ---
+# --- ALGORITMO DE ASIGNACIÓN ---
 
-def run_assignment_algorithm(df_raw):
-    """Aplica las reglas de negocio (Counters, Colaciones, Tareas)."""
+def run_assignment(df_raw, absences_list):
+    """
+    Genera la matriz horaria aplicando reglas y ausentismo.
+    """
+    # 1. Marcar Ausencias
+    df_raw['Estado'] = 'Presente'
+    df_raw['Fecha'] = pd.to_datetime(df_raw['Fecha'])
     
-    # Expandir turnos a horas
-    expanded_rows = []
+    for abs_rec in absences_list:
+        mask = (df_raw['Nombre'] == abs_rec['Nombre']) & (df_raw['Fecha'] == pd.to_datetime(abs_rec['Fecha']))
+        if mask.any():
+            df_raw.loc[mask, 'Turno_Raw'] = "AUSENTE" # Sobrescribir turno
+            df_raw.loc[mask, 'Estado'] = 'Ausente'
+
+    # 2. Expandir a Horas
+    expanded = []
     for _, row in df_raw.iterrows():
         hours = parse_time_range(row['Turno_Raw'])
-        for h in hours:
-            expanded_rows.append({
-                'Fecha': row['Fecha'],
-                'Hora': h,
-                'Nombre': row['Nombre'],
-                'Rol': row['Rol']
-            })
-            
-    if not expanded_rows:
-        return pd.DataFrame()
         
-    df_hourly = pd.DataFrame(expanded_rows)
+        # Determinar tipo turno para ordenamiento
+        shift_type = get_shift_type(row['Turno_Raw'])
+        
+        if not hours:
+            # Registrar al menos una fila para el día libre/ausente
+            expanded.append({
+                'Fecha': row['Fecha'], 'Hora': -1, 'Nombre': row['Nombre'],
+                'Rol': row['Rol'], 'Turno_Raw': row['Turno_Raw'], 
+                'Shift_Type': shift_type, 'Estado': row['Estado']
+            })
+        else:
+            for h in hours:
+                expanded.append({
+                    'Fecha': row['Fecha'], 'Hora': h, 'Nombre': row['Nombre'],
+                    'Rol': row['Rol'], 'Turno_Raw': row['Turno_Raw'], 
+                    'Shift_Type': shift_type, 'Estado': row['Estado']
+                })
+                
+    df_h = pd.DataFrame(expanded)
+    if df_h.empty: return pd.DataFrame()
     
-    # Preparar columnas de salida
-    df_hourly['Tarea'] = "Disponible"
-    df_hourly['Ubicacion'] = "-" # Counter o Zona
+    df_h['Tarea'] = "-"
+    df_h['Counter'] = "-"
     
-    # Procesar grupo por grupo (Fecha y Hora)
-    grouped = df_hourly.groupby(['Fecha', 'Hora'])
+    # 3. Procesar por Bloque Horario
+    grouped = df_h[df_h['Hora'] != -1].groupby(['Fecha', 'Hora'])
     
-    results = []
     counters_pool = ["T1 AIRE", "T1 TIERRA", "T2 AIRE", "T2 TIERRA"]
     
     for (date, hour), group in grouped:
+        # Separar roles
+        execs = group[(group['Rol']=='Ejecutivo') & (group['Estado']=='Presente')]
+        coords = group[(group['Rol']=='Coordinador') & (group['Estado']=='Presente')]
+        hosts = group[(group['Rol']=='Anfitrion') & (group['Estado']=='Presente')]
+        sups = group[(group['Rol']=='Supervisor') & (group['Estado']=='Presente')]
         
-        # Sub-dataframes por rol
-        execs = group[group['Rol'] == 'Ejecutivo']
-        coords = group[group['Rol'] == 'Coordinador']
-        hosts = group[group['Rol'] == 'Anfitrion']
-        sups = group[group['Rol'] == 'Supervisor']
+        # --- LÓGICA EJECUTIVOS ---
+        active_execs = []
         
-        # 1. SUPERVISORES (Regla: No hacer nada, solo marcar)
-        for idx in sups.index:
-            results.append((idx, "Supervisión", "General"))
-            
-        # 2. EJECUTIVOS (Regla: Counters y Colaciones)
-        active_execs_indices = []
-        
+        # Colaciones (Regla Probabilística para simplificar)
         for idx, row in execs.iterrows():
             is_colacion = False
-            # Regla Colación: Diurnos (entran AM) colación 12-14. Nocturnos (entran PM) colación 2-4
-            # Usamos hash del nombre para distribuir aleatoriamente la colación en esos rangos
-            # Hora 13:00 - 15:00 (Rango 12-14 real cubre horas 12 y 13, o 13 y 14)
-            if hour in [13, 14]: 
-                if hash(row['Nombre']) % 2 == (hour % 2): is_colacion = True
-            elif hour in [2, 3]: # Madrugada
-                if hash(row['Nombre']) % 2 == (hour % 2): is_colacion = True
+            # Diurno: Colación 13-15 approx. Nocturno: 2-4
+            if row['Shift_Type'] == 'Diurno' and hour in [13, 14]:
+                if hash(row['Nombre'] + str(date)) % 2 == (hour % 2): is_colacion = True
+            elif row['Shift_Type'] == 'Nocturno' and hour in [2, 3]:
+                if hash(row['Nombre'] + str(date)) % 2 == (hour % 2): is_colacion = True
                 
             if is_colacion:
-                results.append((idx, "Colación", "-"))
+                df_h.at[idx, 'Tarea'] = "C" # Colación
             else:
-                active_execs_indices.append(idx)
+                active_execs.append(idx)
         
         # Asignar Counters
-        demand = 4
-        supply = len(active_execs_indices)
+        supply = len(active_execs)
+        uncovered = max(0, 4 - supply)
+        need_cover_list = counters_pool[supply:] if supply < 4 else []
         
-        for i, idx in enumerate(active_execs_indices):
+        for i, idx in enumerate(active_execs):
             if i < 4:
-                # Cubrir T1A, T1T, T2A, T2T
-                results.append((idx, "Atención", counters_pool[i]))
+                # Tarea 1: Counter asignado
+                cnt = counters_pool[i]
+                df_h.at[idx, 'Tarea'] = "1"
+                df_h.at[idx, 'Counter'] = cnt
             else:
-                # Exceso -> Aire
-                extra = "T1 AIRE" if i % 2 == 0 else "T2 AIRE"
-                results.append((idx, "Refuerzo", extra))
+                # Exceso: Refuerzo Aire
+                cnt = "T1 AIRE" if i%2==0 else "T2 AIRE"
+                df_h.at[idx, 'Tarea'] = "1" # Sigue siendo tarea 1 (atención)
+                df_h.at[idx, 'Counter'] = cnt
                 
-        uncovered_counters = max(0, 4 - supply)
-        # Lista de counters que quedaron vacíos
-        counters_needing_cover = counters_pool[supply:] if supply < 4 else []
-        
-        # 3. COORDINADORES (Regla: Tarea 1, Tarea 2 Admin, Tarea 4 Quiebre)
+        # --- LÓGICA COORDINADORES ---
         active_coords = []
-        
         for idx, row in coords.iterrows():
-            # Regla Tarea 2 (Admin): Max 2 horas. Horarios tipicos 10-11, 14-16, 5-8
-            is_tarea2 = False
-            if uncovered_counters == 0: # Solo si no hay quiebre
-                if hour in [10, 11, 15, 16, 5, 6]:
-                    is_tarea2 = True
+            # Tarea 2 (Admin) vs Disponibilidad
+            is_admin = False
+            if uncovered == 0:
+                if row['Shift_Type'] == 'Diurno' and hour in [10, 11, 15, 16]: is_admin = True
+                if row['Shift_Type'] == 'Nocturno' and hour in [5, 6]: is_admin = True
             
-            if is_tarea2:
-                results.append((idx, "Tarea 2 (Admin)", "Oficina"))
+            if is_admin:
+                df_h.at[idx, 'Tarea'] = "2"
+                df_h.at[idx, 'Counter'] = "Oficina"
             else:
                 active_coords.append(idx)
                 
-        # Asignar disponibles a Tarea 4 (si hay quiebre) o Tarea 1
+        # Cobertura de Quiebres (Tarea 4)
         for idx in active_coords:
-            if uncovered_counters > 0:
-                cnt = counters_needing_cover.pop(0)
-                results.append((idx, "Tarea 4 (Cobertura)", cnt))
-                uncovered_counters -= 1
+            if uncovered > 0:
+                cnt = need_cover_list.pop(0)
+                df_h.at[idx, 'Tarea'] = "4" # Cobertura
+                df_h.at[idx, 'Counter'] = cnt
+                uncovered -= 1
             else:
-                results.append((idx, "Tarea 1 (Coord)", "Piso"))
+                df_h.at[idx, 'Tarea'] = "1" # Supervisión piso
+                df_h.at[idx, 'Counter'] = "Piso"
                 
-        # 4. ANFITRIONES (Regla: Zona Int/Nac, Tarea 4 si Coord no cubre)
+        # --- LÓGICA ANFITRIONES ---
         for idx, row in hosts.iterrows():
-            if uncovered_counters > 0:
-                # Quiebre critico
-                cnt = counters_needing_cover.pop(0) if counters_needing_cover else "Cualquiera"
-                results.append((idx, "Tarea 4 (Apoyo Extremo)", cnt))
-                uncovered_counters -= 1
+            if uncovered > 0:
+                cnt = need_cover_list.pop(0) if need_cover_list else "Apoyo"
+                df_h.at[idx, 'Tarea'] = "4"
+                df_h.at[idx, 'Counter'] = cnt
+                uncovered -= 1
             else:
-                # Zona
-                zona = "Zona Internacional" if hash(row['Nombre']) % 2 == 0 else "Zona Nacional"
-                results.append((idx, "Tarea 1 (Anfitrion)", zona))
+                df_h.at[idx, 'Tarea'] = "1"
+                df_h.at[idx, 'Counter'] = "Zona Int" if i%2==0 else "Zona Nac"
 
-    # Escribir resultados
-    for idx, task, loc in results:
-        df_hourly.at[idx, 'Tarea'] = task
-        df_hourly.at[idx, 'Ubicacion'] = loc
+        # --- LÓGICA SUPERVISORES ---
+        for idx, row in sups.iterrows():
+            df_h.at[idx, 'Tarea'] = "1"
+            df_h.at[idx, 'Counter'] = "General"
+
+    # 4. Post-Proceso: Detectar Tarea 3 (Cambio de Counter)
+    # Calculamos el counter "Moda" (más frecuente) por persona por día
+    # Si en una hora específica el counter != Moda, es Tarea 3 (Movimiento)
+    
+    # Solo para filas con hora válida
+    valid_rows = df_h[df_h['Hora'] != -1]
+    
+    # Moda por día/persona
+    mode_counters = valid_rows.groupby(['Fecha', 'Nombre'])['Counter'].agg(lambda x: x.mode().iloc[0] if not x.mode().empty else "-")
+    
+    for idx, row in valid_rows.iterrows():
+        if row['Tarea'] == "1" and row['Rol'] == 'Ejecutivo':
+            try:
+                main_cnt = mode_counters.loc[(row['Fecha'], row['Nombre'])]
+                curr_cnt = row['Counter']
+                if curr_cnt != "-" and main_cnt != "-" and curr_cnt != main_cnt:
+                    df_h.at[idx, 'Tarea'] = "3" # Floating
+            except: pass
+
+    return df_h
+
+# --- GENERADOR EXCEL (FORMATO ADMIN) ---
+
+def generate_admin_excel(df_processed, month_name, year):
+    output = io.BytesIO()
+    workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+    worksheet = workbook.add_worksheet(f"Admin {month_name}")
+    
+    # Estilos
+    fmt_header = workbook.add_format({'bold': True, 'align': 'center', 'bg_color': '#D3D3D3', 'border': 1})
+    fmt_day = workbook.add_format({'bold': True, 'align': 'center', 'bg_color': '#BDD7EE', 'border': 1})
+    fmt_cell = workbook.add_format({'align': 'center', 'border': 1, 'font_size': 9})
+    fmt_task4 = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#FFC7CE', 'font_color': '#9C0006'}) # Rojo
+    fmt_colacion = workbook.add_format({'align': 'center', 'border': 1, 'bg_color': '#E2EFDA'}) # Verde
+    fmt_libre = workbook.add_format({'bg_color': '#F2F2F2', 'border': 1})
+    
+    # Preparar datos
+    # Necesitamos una lista de personas única ordenada
+    people = df_processed[['Nombre', 'Rol', 'Shift_Type']].drop_duplicates().sort_values(['Rol', 'Shift_Type', 'Nombre'])
+    
+    # Fechas únicas
+    dates = sorted(df_processed['Fecha'].unique())
+    
+    # --- ESCRIBIR CABECERAS ---
+    # Fila 0: Días (Agrupados)
+    # Fila 1: Columnas fijas por día (Turno, Term, Count, 0...23)
+    
+    row_day = 0
+    row_sub = 1
+    start_col = 0
+    
+    # Columna Nombre Fija
+    worksheet.merge_range(0, 0, 1, 0, "Colaborador", fmt_header)
+    worksheet.merge_range(0, 1, 1, 1, "Rol", fmt_header)
+    start_col = 2
+    
+    date_col_map = {} # fecha -> indice columna inicio
+    
+    for d in dates:
+        d_str = pd.to_datetime(d).strftime("%d-%b")
+        # Ancho del bloque: Turno (1) + Terminal (1) + Counter (1) + 24 Horas = 27 cols
+        block_width = 27 
         
-    return df_hourly
-
-# --- INTERFAZ GRÁFICA ---
-
-st.sidebar.header("1. Configuración del Análisis")
-month_names = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
-               "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-selected_month_name = st.sidebar.selectbox("Mes a Analizar", month_names, index=1) # Default Febrero
-selected_year = st.sidebar.number_input("Año", value=2026, step=1)
-
-# Calcular número de mes para filtrar
-month_map = {name: i+1 for i, name in enumerate(month_names)}
-month_num = month_map[selected_month_name]
-
-st.sidebar.markdown("---")
-st.sidebar.header("2. Carga de Excel (.xlsx)")
-
-def smart_select_sheet(excel_file, label):
-    """Helper para UI: Muestra dropdown con sugerencia inteligente."""
-    if excel_file is not None:
-        try:
-            xl = pd.ExcelFile(excel_file)
-            sheets = xl.sheet_names
+        # Escribir Día
+        worksheet.merge_range(row_day, start_col, row_day, start_col + block_width - 1, d_str, fmt_day)
+        
+        # Escribir Sub-cabeceras
+        worksheet.write(row_sub, start_col, "Turno", fmt_header)
+        worksheet.write(row_sub, start_col+1, "Term", fmt_header)
+        worksheet.write(row_sub, start_col+2, "Count", fmt_header)
+        
+        for h in range(24):
+            worksheet.write(row_sub, start_col + 3 + h, h, fmt_header)
             
-            # Buscar sugerencia (insensitive case)
-            default_ix = 0
-            for i, s in enumerate(sheets):
-                if selected_month_name.lower() in s.lower():
-                    default_ix = i
-                    break
+        date_col_map[d] = start_col
+        start_col += block_width + 1 # +1 para separador
+        
+    # --- ESCRIBIR DATOS ---
+    curr_row = 2
+    
+    # Agrupar datos para acceso rápido
+    # df_processed indexado por (Nombre, Fecha, Hora)
+    df_idx = df_processed.set_index(['Nombre', 'Fecha', 'Hora'])
+    df_day_idx = df_processed.set_index(['Nombre', 'Fecha']) # Para sacar turno raw y counter principal
+    
+    last_role = None
+    
+    for _, person in people.iterrows():
+        name = person['Nombre']
+        role = person['Rol']
+        
+        # Separador visual entre roles
+        if last_role and role != last_role:
+            curr_row += 1 
+        last_role = role
+        
+        worksheet.write(curr_row, 0, name, fmt_cell)
+        worksheet.write(curr_row, 1, role, fmt_cell)
+        
+        for d in dates:
+            if d not in date_col_map: continue
+            c_start = date_col_map[d]
             
-            selected = st.sidebar.selectbox(f"Hoja para {label}", sheets, index=default_ix, key=label)
-            return selected
-        except Exception as e:
-            st.sidebar.error(f"Error leyendo archivo: {e}")
-            return None
-    return None
+            # Obtener datos del día para la persona
+            # Info general del día (Turno, Counter Principal)
+            try:
+                # Buscar cualquier registro de ese día para sacar turno y counter moda
+                day_records = df_processed[(df_processed['Nombre'] == name) & (df_processed['Fecha'] == d)]
+                if day_records.empty:
+                    worksheet.write(curr_row, c_start, "-", fmt_libre)
+                    continue
+                
+                # Turno Raw
+                turno_str = day_records.iloc[0]['Turno_Raw']
+                worksheet.write(curr_row, c_start, turno_str, fmt_cell)
+                
+                # Counter Principal (Moda)
+                cnt_list = day_records[day_records['Counter'] != '-']['Counter']
+                main_cnt = cnt_list.mode().iloc[0] if not cnt_list.empty else "-"
+                
+                # Separar Term y Count
+                term = "T1" if "T1" in main_cnt else ("T2" if "T2" in main_cnt else "-")
+                count_type = "AIRE" if "AIRE" in main_cnt else ("TIERRA" if "TIERRA" in main_cnt else main_cnt)
+                
+                worksheet.write(curr_row, c_start+1, term, fmt_cell)
+                worksheet.write(curr_row, c_start+2, count_type, fmt_cell)
+                
+                # Escribir Horas
+                for h in range(24):
+                    try:
+                        val = df_idx.loc[(name, d, h), 'Tarea']
+                        # Si hay duplicados (raro), toma el primero
+                        if isinstance(val, pd.Series): val = val.iloc[0]
+                        
+                        fmt = fmt_cell
+                        if val == "4": fmt = fmt_task4
+                        if val == "C": fmt = fmt_colacion
+                        
+                        worksheet.write(curr_row, c_start + 3 + h, val, fmt)
+                    except KeyError:
+                        # No hay tarea asignada para esa hora (fuera de turno)
+                        worksheet.write(curr_row, c_start + 3 + h, "", fmt_libre)
+                        
+            except Exception as e:
+                pass
+                
+        curr_row += 1
+        
+    workbook.close()
+    return output
+
+# --- UI PRINCIPAL ---
+
+st.sidebar.header("1. Carga de Archivos (.xlsx)")
 
 # Uploaders
-u_exec = st.sidebar.file_uploader("Ejecutivos", type=["xlsx"])
-s_exec = smart_select_sheet(u_exec, "Ejecutivos")
+files = {}
+roles = ["Ejecutivo", "Anfitrion", "Coordinador", "Supervisor"]
+for r in roles:
+    files[r] = st.sidebar.file_uploader(f"Turnos {r}", type=["xlsx"], key=r)
 
-u_host = st.sidebar.file_uploader("Anfitriones", type=["xlsx"])
-s_host = smart_select_sheet(u_host, "Anfitriones")
+# Configuración
+st.sidebar.markdown("---")
+st.sidebar.header("2. Configuración")
+months = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
+          "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+sel_month = st.sidebar.selectbox("Mes", months, index=1)
+sel_year = st.sidebar.number_input("Año", 2025, 2030, 2026)
+month_num = months.index(sel_month) + 1
 
-u_coord = st.sidebar.file_uploader("Coordinadores", type=["xlsx"])
-s_coord = smart_select_sheet(u_coord, "Coordinadores")
+# --- GESTOR DE AUSENCIAS ---
+st.sidebar.markdown("---")
+st.sidebar.header("3. Registro de Ausencias")
 
-u_sup = st.sidebar.file_uploader("Supervisores", type=["xlsx"])
-s_sup = smart_select_sheet(u_sup, "Supervisores")
+# Necesitamos cargar nombres primero para llenar esto
+loaded_names = []
+if st.session_state.get('df_master_names') is not None:
+    loaded_names = st.session_state['df_master_names']
 
-# --- PROCESAMIENTO ---
-
-if st.sidebar.button("🚀 Generar Planificación"):
-    if all([u_exec, s_exec, u_host, s_host, u_coord, s_coord, u_sup, s_sup]):
-        with st.spinner(f"Analizando turnos para {selected_month_name}..."):
+with st.sidebar.expander("Gestionar Ausencias", expanded=False):
+    if loaded_names:
+        a_name = st.selectbox("Colaborador", loaded_names)
+        a_date = st.date_input("Fecha Ausencia", datetime(sel_year, month_num, 1))
+        a_reason = st.text_input("Motivo", "Licencia")
+        if st.button("Agregar Ausencia"):
+            add_absence(a_name, a_date.strftime("%Y-%m-%d"), a_reason)
+            st.success("Agregado")
             
-            # 1. Cargar Datos
-            df_exec = load_excel_sheet(u_exec, s_exec, 'Ejecutivo', month_num, selected_year)
-            df_host = load_excel_sheet(u_host, s_host, 'Anfitrion', month_num, selected_year)
-            df_coord = load_excel_sheet(u_coord, s_coord, 'Coordinador', month_num, selected_year)
-            df_sup = load_excel_sheet(u_sup, s_sup, 'Supervisor', month_num, selected_year)
+    # Listar
+    if st.session_state.absences:
+        st.write("Ausencias registradas:")
+        for i, abs_rec in enumerate(st.session_state.absences):
+            c1, c2 = st.columns([4, 1])
+            c1.caption(f"{abs_rec['Nombre']} - {abs_rec['Fecha']}")
+            if c2.button("X", key=f"del_{i}"):
+                remove_absence(i)
+                st.rerun()
+
+# --- PROCESO PRINCIPAL ---
+
+if st.button("Generar Planificación Admin"):
+    # Validar cargas
+    if not all(files.values()):
+        st.error("Por favor carga los 4 archivos Excel.")
+    else:
+        with st.spinner("Leyendo Excels y procesando reglas..."):
+            # 1. Cargar Datos Raw
+            dfs = []
+            for r in roles:
+                # Intentar adivinar hoja
+                xl = pd.ExcelFile(files[r])
+                sheet = next((s for s in xl.sheet_names if sel_month.lower() in s.lower()), xl.sheet_names[0])
+                df = load_excel_sheet(files[r], sheet, r, month_num, sel_year)
+                dfs.append(df)
             
-            # Unir todo
-            df_master = pd.concat([df_exec, df_host, df_coord, df_sup], ignore_index=True)
+            df_master = pd.concat(dfs, ignore_index=True)
             
-            if not df_master.empty:
-                st.success(f"Datos extraídos correctamente. Total registros brutos: {len(df_master)}")
+            if df_master.empty:
+                st.error("No se encontraron datos válidos para el mes seleccionado.")
+            else:
+                # Guardar nombres para el selector de ausencias
+                st.session_state['df_master_names'] = sorted(df_master['Nombre'].unique().tolist())
                 
                 # 2. Ejecutar Algoritmo
-                df_final = run_assignment_algorithm(df_master)
+                df_results = run_assignment(df_master, st.session_state.absences)
                 
-                if df_final.empty:
-                    st.warning("No se generaron turnos. Verifica que las fechas del Excel coincidan con el mes seleccionado.")
-                else:
-                    # 3. Mostrar Resultados
-                    st.header(f"Planificación: {selected_month_name} {selected_year}")
+                if not df_results.empty:
+                    # 3. Mostrar KPIs
+                    st.success("Planificación Generada Exitosamente")
                     
-                    # KPIs
-                    kpi1, kpi2, kpi3 = st.columns(3)
-                    kpi1.metric("Horas Totales Cubiertas", len(df_final))
-                    quiebres = df_final[df_final['Tarea'].str.contains("Tarea 4", na=False)]
-                    kpi2.metric("Apoyos por Quiebre (Tarea 4)", len(quiebres))
-                    colaciones = df_final[df_final['Tarea'] == "Colación"]
-                    kpi3.metric("Colaciones Asignadas", len(colaciones))
+                    c1, c2, c3 = st.columns(3)
+                    total_hours = len(df_results[df_results['Tarea'].isin(['1','2','3','4'])])
+                    overtime_hours = len(df_results[df_results['Tarea'] == '4'])
+                    colaciones = len(df_results[df_results['Tarea'] == 'C'])
                     
-                    # Visualización Matriz
-                    st.subheader("Disponibilidad por Hora")
-                    heatmap_data = df_final.groupby(['Fecha', 'Hora'])['Nombre'].count().reset_index()
-                    st.vega_lite_chart(heatmap_data, {
-                        'mark': 'rect',
-                        'encoding': {
-                            'x': {'field': 'Hora', 'type': 'ordinal'},
-                            'y': {'field': 'Fecha', 'type': 'ordinal', 'timeUnit': 'yearmonthdate'},
-                            'color': {'field': 'Nombre', 'aggregate': 'count', 'type': 'quantitative', 'scale': {'scheme': 'yellowgreenblue'}}
-                        }
-                    }, use_container_width=True)
+                    c1.metric("Horas Totales", total_hours)
+                    c2.metric("Horas Extra (Tarea 4)", overtime_hours, delta_color="inverse")
+                    c3.metric("Colaciones", colaciones)
                     
-                    # Tabla Detalle
-                    st.dataframe(df_final, use_container_width=True)
+                    # 4. Generar Excel Admin
+                    excel_data = generate_admin_excel(df_results, sel_month, sel_year)
                     
-                    # 4. Descarga Excel
-                    buffer = io.BytesIO()
-                    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                        df_final.to_excel(writer, sheet_name='Detalle_Completo', index=False)
-                        
-                        # Resumen de Cobertura
-                        piv_cob = df_final.pivot_table(index='Fecha', columns='Hora', values='Nombre', aggfunc='count')
-                        piv_cob.to_excel(writer, sheet_name='Mapa_Calor')
-                        
-                        # Resumen por Persona
-                        piv_per = df_final.pivot_table(index=['Rol','Nombre'], columns='Tarea', values='Hora', aggfunc='count', fill_value=0)
-                        piv_per.to_excel(writer, sheet_name='Resumen_Persona')
-                        
                     st.download_button(
-                        label="📥 Descargar Excel Final",
-                        data=buffer.getvalue(),
-                        file_name=f"Planificacion_{selected_month_name}_{selected_year}.xlsx",
-                        mime="application/vnd.ms-excel"
+                        label="📥 Descargar Sábana Mensual (Formato Admin)",
+                        data=excel_data.getvalue(),
+                        file_name=f"Admin_{sel_month}_{sel_year}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-            else:
-                st.error("No se encontraron datos. Revisa que las hojas seleccionadas tengan el formato correcto.")
-    else:
-        st.warning("Por favor, carga todos los archivos y asegúrate de seleccionar una hoja válida para cada uno.")
+                    
+                    # Preview
+                    st.subheader("Vista Previa (Primeros 100 registros)")
+                    st.dataframe(df_results.head(100))
+                    
+                else:
+                    st.warning("No se generaron turnos. Revisa las fechas.")
