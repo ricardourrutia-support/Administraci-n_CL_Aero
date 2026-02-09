@@ -8,7 +8,7 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Planificador Maestro de Turnos (Multi-Formato)")
+st.title("✈️ Planificador Maestro de Turnos (Todos los Ejecutivos)")
 
 # --- ESTADO DE SESIÓN ---
 if 'absences' not in st.session_state:
@@ -19,12 +19,12 @@ if 'collaborators_list' not in st.session_state:
 # --- PARSEO DE TURNOS ---
 
 def parse_shift_time(shift_str):
-    """Convierte '09:00 - 20:00' o '21:00 - 08:00' a lista de horas."""
+    """Convierte strings de turnos a listas de horas."""
     if pd.isna(shift_str): return []
     s = str(shift_str).lower().strip()
     
-    # Palabras clave de ausencia/libre
-    if any(x in s for x in ['libre', 'nan', 'l', 'x', 'vacaciones', 'licencia', 'falla', 'domingos libres']):
+    # Filtros de "No turno"
+    if any(x in s for x in ['libre', 'nan', 'l', 'x', 'vacaciones', 'licencia', 'falla', 'domingos libres', 'festivo']):
         return []
     
     # Limpieza
@@ -51,111 +51,111 @@ def parse_shift_time(shift_str):
         
         if start_h < end_h:
             return list(range(start_h, end_h))
-        elif start_h > end_h: # Turno noche (cruce de día)
+        elif start_h > end_h: # Cruce de medianoche (ej 22 a 07)
             return list(range(start_h, 24)) + list(range(0, end_h))
         else:
             return [start_h]
     except:
         return []
 
-# --- LECTURA INTELIGENTE DE EXCEL ---
+# --- LECTURA ROBUSTA (SALTA FILAS BASURA) ---
 
 def find_date_header_row(df):
-    """
-    Busca la fila que contiene fechas (datetime) o números de día (1-31).
-    Retorna: (indice_fila, tipo_detectado ['date', 'number'])
-    """
-    # Revisar las primeras 20 filas
+    """Busca la fila que contiene las fechas."""
     for i in range(min(20, len(df))):
         row = df.iloc[i]
         date_count = 0
         number_count = 0
         
         for val in row:
-            # Chequear si es fecha
             if isinstance(val, (datetime, pd.Timestamp)):
                 date_count += 1
-            # Chequear si es string fecha YYYY-MM-DD
             elif isinstance(val, str) and re.match(r'\d{4}-\d{2}-\d{2}', val):
                 date_count += 1
-            # Chequear si es número de día (Supervisor)
             elif isinstance(val, (int, float)):
                 try:
-                    if 1 <= int(val) <= 31:
-                        number_count += 1
+                    if 1 <= int(val) <= 31: number_count += 1
                 except: pass
                 
-        # Umbral para decidir si es la cabecera
-        if date_count > 3: # Si hay más de 3 fechas, es la fila de fechas
-            return i, 'date'
-        if number_count > 15: # Si hay muchos números (1..30), es supervisores
-            return i, 'number'
+        if date_count > 3: return i, 'date'
+        if number_count > 15: return i, 'number'
             
     return None, None
 
 def process_file_sheet(file, sheet_name, role, target_month, target_year):
     extracted_data = []
     try:
-        # 1. Leer hoja cruda
+        # 1. Leer hoja completa (sin headers al principio)
         df_raw = pd.read_excel(file, sheet_name=sheet_name, header=None)
         
-        # 2. Buscar dónde están las fechas
+        # 2. Buscar fila de fechas
         header_idx, header_type = find_date_header_row(df_raw)
         
         if header_idx is None:
-            st.warning(f"⚠️ No se detectaron fechas en la hoja '{sheet_name}' ({role}). Revisa el formato.")
+            st.warning(f"⚠️ No se detectaron fechas en '{sheet_name}' ({role}).")
             return pd.DataFrame()
             
         # 3. Recargar usando esa fila como header
         df = pd.read_excel(file, sheet_name=sheet_name, header=header_idx)
         
-        # 4. Identificar Columna de Nombres (generalmente la primera columna de texto a la izquierda)
-        name_col = df.columns[0] # Default
+        # 4. Encontrar columna de Nombre
+        name_col = df.columns[0]
         for col in df.columns:
-            # Buscar columna que NO sea fecha y parezca nombre
-            if "nombre" in str(col).lower() or "cargo" in str(col).lower() or "supervisor" in str(col).lower():
+            c_str = str(col).lower()
+            if "nombre" in c_str or "cargo" in c_str or "supervisor" in c_str:
                 name_col = col
                 break
         
-        # 5. Mapear columnas a fechas reales
-        date_map = {} # {nombre_columna: objeto_datetime}
-        
+        # 5. Mapear Columnas de Fecha
+        date_map = {}
         for col in df.columns:
             col_date = None
-            
             if header_type == 'date':
-                # Intentar parsear la columna si es fecha
-                if isinstance(col, (datetime, pd.Timestamp)):
-                    col_date = col
+                if isinstance(col, (datetime, pd.Timestamp)): col_date = col
                 elif isinstance(col, str):
                     try: col_date = pd.to_datetime(col)
                     except: pass
-            
             elif header_type == 'number':
-                # Supervisores: la columna es un número (día del mes)
                 try:
                     d = int(float(col))
                     col_date = datetime(target_year, target_month, d)
                 except: pass
             
-            # Validar que la fecha corresponde al mes seleccionado
             if col_date and col_date.month == target_month and col_date.year == target_year:
                 date_map[col] = col_date
 
-        # 6. Extraer Datos
+        # 6. ITERAR TODAS LAS FILAS (SALTANDO BASURA)
         for idx, row in df.iterrows():
             name_val = row[name_col]
             
-            # Filtros de basura (filas vacías o subtítulos)
-            if pd.isna(name_val) or str(name_val).strip() == "" or str(name_val).lower() in ["nombre", "cargo", "supervisor", "turno", "fecha"]:
+            # --- FILTROS DE LIMPIEZA ---
+            # 1. Si es NaN o vacío
+            if pd.isna(name_val) or str(name_val).strip() == "":
+                continue
+            
+            s_name = str(name_val).strip()
+            
+            # 2. Si parece un encabezado repetido
+            if s_name.lower() in ["nombre", "cargo", "supervisor", "turno", "fecha"]:
                 continue
                 
-            # Extraer turnos de las columnas mapeadas
+            # 3. Si es un número (Totales de horas, filas de resumen)
+            # Esto elimina la fila de "números" que mencionaste
+            if isinstance(name_val, (int, float)) or s_name.replace('.', '', 1).isdigit():
+                continue
+                
+            # 4. Si contiene palabras clave de resumen
+            if any(k in s_name.lower() for k in ["total", "suma", "horas", "hh", "resumen"]):
+                continue
+
+            # Si pasa los filtros, es una persona real
+            clean_name = s_name.title()
+            
             for col_name, date_obj in date_map.items():
                 shift_val = row[col_name]
                 if pd.notna(shift_val):
                     extracted_data.append({
-                        'Nombre': str(name_val).strip().title(),
+                        'Nombre': clean_name,
                         'Rol': role,
                         'Fecha': date_obj,
                         'Turno_Raw': shift_val
@@ -168,7 +168,7 @@ def process_file_sheet(file, sheet_name, role, target_month, target_year):
 
 # --- UI LATERAL ---
 
-st.sidebar.header("1. Configuración de Fecha")
+st.sidebar.header("1. Fecha y Archivos")
 months = {
     "Enero": 1, "Febrero": 2, "Marzo": 3, "Abril": 4, "Mayo": 5, "Junio": 6,
     "Julio": 7, "Agosto": 8, "Septiembre": 9, "Octubre": 10, "Noviembre": 11, "Diciembre": 12
@@ -176,9 +176,6 @@ months = {
 sel_month_name = st.sidebar.selectbox("Mes", list(months.keys()), index=1)
 sel_year = st.sidebar.number_input("Año", value=2026)
 target_month = months[sel_month_name]
-
-st.sidebar.markdown("---")
-st.sidebar.header("2. Archivos")
 
 files_config = [
     {"label": "Ejecutivos", "key": "exec"},
@@ -191,7 +188,7 @@ uploaded_sheets = {}
 
 for fconf in files_config:
     role = fconf["label"]
-    file = st.sidebar.file_uploader(f"Excel {role}", type=["xlsx"], key=fconf["key"])
+    file = st.sidebar.file_uploader(f"{role}", type=["xlsx"], key=fconf["key"])
     
     if file:
         try:
@@ -209,52 +206,37 @@ for fconf in files_config:
         except:
             st.sidebar.error("Error leyendo archivo.")
 
-# --- UI AUSENCIAS ---
+# --- AUSENCIAS ---
 st.sidebar.markdown("---")
-st.sidebar.header("3. Ausencias")
+st.sidebar.header("2. Ausencias")
 
-if st.sidebar.button("🔄 1° Leer Nombres"):
+if st.sidebar.button("🔄 Cargar Lista de Nombres"):
     if not uploaded_sheets:
         st.sidebar.error("Sube archivos primero.")
     else:
         all_names = set()
-        with st.spinner("Leyendo nombres..."):
+        with st.spinner("Escaneando..."):
             for role, (uf, us) in uploaded_sheets.items():
                 try:
-                    # Leemos datos
                     df_t = process_file_sheet(uf, us, role, target_month, sel_year)
                     if not df_t.empty:
                         all_names.update(df_t['Nombre'].unique())
                 except: pass
-        
         st.session_state.collaborators_list = sorted(list(all_names))
-        st.sidebar.success(f"Nombres cargados: {len(all_names)}")
+        st.sidebar.success(f"Encontrados: {len(all_names)}")
 
 if st.session_state.collaborators_list:
-    with st.sidebar.expander("Agregar Ausencia"):
+    with st.sidebar.expander("Añadir Ausencia"):
         p = st.selectbox("Persona", st.session_state.collaborators_list)
-        d = st.date_input("Día", datetime(sel_year, target_month, 1))
-        if st.button("Agregar"):
-            st.session_state.absences.append({"Nombre": p, "Fecha": d})
-            st.success("Listo")
-
-if st.session_state.absences:
-    st.sidebar.dataframe(pd.DataFrame(st.session_state.absences))
-    if st.sidebar.button("Limpiar Ausencias"):
-        st.session_state.absences = []
-        st.rerun()
+        d_range = st.date_input("Fechas", [])
+        if st.button("Guardar"):
+            st.session_state.absences.append({"Nombre": p, "Rango": str(d_range)})
+            st.success("Guardado (Recuerda regenerar)")
 
 # --- LÓGICA DE NEGOCIO ---
 
 def logic_engine(df):
-    # 1. Marcar ausencias
-    for a in st.session_state.absences:
-        # Convertir fecha de ausencia a datetime64 para comparar
-        abs_date = pd.to_datetime(a['Fecha'])
-        mask = (df['Nombre'] == a['Nombre']) & (df['Fecha'] == abs_date)
-        df.loc[mask, 'Turno_Raw'] = 'AUSENTE'
-
-    # 2. Expandir
+    # Expandir
     rows = []
     for _, r in df.iterrows():
         hours = parse_shift_time(r['Turno_Raw'])
@@ -271,7 +253,7 @@ def logic_engine(df):
     df_h = pd.DataFrame(rows)
     if df_h.empty: return df_h
     
-    # 3. Asignación
+    # Asignación
     counters_list = ["T1 AIRE", "T1 TIERRA", "T2 AIRE", "T2 TIERRA"]
     
     for (d, h), g in df_h[df_h['Hora'] != -1].groupby(['Fecha', 'Hora']):
@@ -283,8 +265,6 @@ def logic_engine(df):
         for idx in execs:
             # Colación
             is_col = False
-            # Regla simple: Diurno colación 13 o 14. Nocturno 2 o 3.
-            # Usamos hash para distribuir mitad y mitad
             row_hash = hash(df_h.at[idx, 'Nombre'])
             if df_h.at[idx, 'Tipo'] == 'Diurno' and h in [13, 14]:
                 if row_hash % 2 == (h % 2): is_col = True
@@ -298,8 +278,6 @@ def logic_engine(df):
                 active.append(idx)
         
         # Asignar a Counters
-        uncovered = max(0, 4 - len(active))
-        
         for i, idx in enumerate(active):
             if i < 4:
                 df_h.at[idx, 'Counter'] = counters_list[i]
@@ -308,7 +286,9 @@ def logic_engine(df):
                 
         # --- COORDINADORES ---
         coords = g[g['Rol']=='Coordinador'].index.tolist()
+        uncovered = max(0, 4 - len(active))
         avail_coords = []
+        
         for idx in coords:
             # Tarea 2 si horario lo permite y no hay quiebre
             is_t2 = False
@@ -355,7 +335,7 @@ def logic_engine(df):
 def make_excel(df):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana")
+    ws = wb.add_worksheet("Sábana Mensual")
     
     fmt_h = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9D9D9', 'align': 'center'})
     fmt_d = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#CFE2F3', 'align': 'center'})
@@ -363,7 +343,6 @@ def make_excel(df):
     fmt_warn = wb.add_format({'border': 1, 'align': 'center', 'bg_color': '#F4CCCC', 'font_color': '#990000'})
     fmt_ok = wb.add_format({'border': 1, 'align': 'center', 'bg_color': '#D9EAD3'})
 
-    # Headers
     ws.write(1, 0, "Colaborador", fmt_h)
     ws.write(1, 1, "Rol", fmt_h)
     
@@ -381,7 +360,6 @@ def make_excel(df):
         d_map[d] = col
         col += 26
         
-    # Filas
     people = df[['Nombre', 'Rol']].drop_duplicates().sort_values(['Rol', 'Nombre'])
     df_idx = df.set_index(['Nombre', 'Fecha', 'Hora'])
     df_base = df.drop_duplicates(['Nombre', 'Fecha']).set_index(['Nombre', 'Fecha'])
@@ -396,14 +374,11 @@ def make_excel(df):
             if d not in d_map: continue
             c = d_map[d]
             
-            # Turno Texto
             try:
                 t_raw = df_base.loc[(n, d), 'Turno_Raw']
                 ws.write(row, c, str(t_raw), fmt_c)
-            except:
-                ws.write(row, c, "-", fmt_c)
+            except: ws.write(row, c, "-", fmt_c)
             
-            # Horas
             for h in range(24):
                 try:
                     val = df_idx.loc[(n, d, h)]
@@ -419,8 +394,7 @@ def make_excel(df):
                     if task == 'C': style = fmt_ok
                     
                     ws.write(row, c+2+h, task, style)
-                except:
-                    pass
+                except: pass
         row += 1
         
     wb.close()
@@ -428,25 +402,20 @@ def make_excel(df):
 
 # --- MAIN ---
 
-if st.button("🚀 2° Generar"):
+if st.button("🚀 Generar Planificación"):
     if not uploaded_sheets:
-        st.error("Sube archivos y selecciona hojas.")
+        st.error("Carga archivos primero.")
     else:
         dfs = []
-        with st.spinner("Procesando..."):
+        with st.spinner("Procesando todas las filas (ignorando basura)..."):
             for role, (uf, us) in uploaded_sheets.items():
                 d = process_file_sheet(uf, us, role, target_month, sel_year)
                 dfs.append(d)
         
         full = pd.concat(dfs)
         if full.empty:
-            st.error("No se encontraron datos. Verifica que el mes seleccionado coincida con las fechas en el Excel.")
+            st.error("No se encontraron datos.")
         else:
             final = logic_engine(full)
-            st.success(f"Procesados {len(final['Nombre'].unique())} personas.")
-            
-            # Métricas
-            st.metric("Total Horas Cubiertas", len(final[final['Hora'] != -1]))
-            
-            x = make_excel(final)
-            st.download_button("📥 Descargar Excel", x, f"Plan_{sel_month_name}.xlsx")
+            st.success(f"Analizados {len(final['Nombre'].unique())} colaboradores.")
+            st.download_button("📥 Descargar Excel", make_excel(final), f"Plan_{sel_month_name}.xlsx")
