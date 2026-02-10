@@ -8,7 +8,7 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: Reglas de Negocio V4")
+st.title("✈️ Gestor de Turnos: Reglas de Negocio V4 (Corregido)")
 st.markdown("""
 **Reglas Actualizadas (Doc 1):**
 * **Agentes:** Cobertura cruzada Aire/Tierra. Selector para agentes **Sin TICA**.
@@ -153,7 +153,7 @@ if 'exec' in uploaded_sheets:
                 unique_agents = sorted(df_temp['Nombre'].unique())
                 agents_no_tica = st.sidebar.multiselect("Selecciona Agentes SIN TICA (Solo Tierra)", unique_agents)
 
-# --- MOTOR LÓGICO V4 ---
+# --- MOTOR LÓGICO V4 (CORREGIDO) ---
 def logic_engine(df, no_tica_list):
     rows = []
     # Prioridad de Roles para Excel: Agente -> Supervisor -> Coordinador -> Anfitrion
@@ -185,8 +185,8 @@ def logic_engine(df, no_tica_list):
         sups = g[g['Rol']=='Supervisor'].index.tolist()
         
         # --- 1. COLACIONES ---
-        # Función auxiliar
-        def apply_break(indices_list, valid_start_range, break_slots, role_name):
+        # Función auxiliar CORREGIDA (sin role_name)
+        def apply_break(indices_list, valid_start_range, break_slots):
             candidates = []
             for idx in indices_list:
                 st_h = df_h.at[idx, 'Start_H']
@@ -202,7 +202,7 @@ def logic_engine(df, no_tica_list):
                     df_h.at[idx, 'Counter'] = 'Casino'
 
         # Agentes Diurnos (8-10) -> Break 12-15
-        apply_break(agentes, (8, 10), [13, 14]) # Heurística: 13 y 14 para cubrir rango 12-15
+        apply_break(agentes, (8, 10), [13, 14]) 
         # Agentes Nocturnos (20-22) -> Break 02-04
         apply_break(agentes, (20, 22), [2, 3])
         
@@ -214,7 +214,6 @@ def logic_engine(df, no_tica_list):
         # Coordinadores (Reglas específicas Doc 1)
         apply_break(coords, (5, 5), [12]) # Ingreso 05:00 -> Break ~12
         apply_break(coords, (21, 21), [2]) # Ingreso 21:00 -> Break ~02
-        # Ingreso 10:00 no tiene colación explícita en reglas nuevas, solo Tareas 2.
         
         # --- 2. FILTRAR DISPONIBLES ---
         active_agentes = [i for i in agentes if df_h.at[i, 'Tarea'] != 'C']
@@ -270,10 +269,6 @@ def logic_engine(df, no_tica_list):
                 is_tierra = "TIERRA" in cnt_name
                 is_aire = "AIRE" in cnt_name
                 
-                # TAREA 3: Cobertura Cruzada (Aire->Tierra, Tierra->Aire)
-                # Si falta Tierra, busco alguien que sobre de Aire (Con TICA)
-                # Si falta Aire, busco alguien que sobre de Tierra (Sin TICA o Con TICA)
-                
                 filled = False
                 
                 # Intento 1: Flotante
@@ -311,24 +306,16 @@ def logic_engine(df, no_tica_list):
                     active_anfitriones.pop(0) # Ya usado
                     filled = True
                 
-                # Intento 4: HHEE (Nadie pudo cubrir)
-                if not filled:
-                    # Creamos un registro virtual de HHEE
-                    # Nota: Esto es complejo de insertar en el DF iterando, 
-                    # por simplicidad marcamos en un log o dejamos el counter vacio en el excel
-                    pass 
-
         # --- 5. ASIGNAR RESTANTES ---
         
-        # Agentes Sobrantes -> Refuerzo (Aire prioridad)
-        # Los Sin TICA van a Refuerzo Tierra obligados
+        # Agentes Sobrantes
         for idx in spare_no_tica:
             df_h.at[idx, 'Tarea'] = '1'
             df_h.at[idx, 'Counter'] = "Refuerzo Tierra"
             
         for i, idx in enumerate(spare_with_tica):
             df_h.at[idx, 'Tarea'] = '1'
-            df_h.at[idx, 'Counter'] = "T1 AIRE" if i%2==0 else "T2 AIRE" # Prioridad Aire
+            df_h.at[idx, 'Counter'] = "T1 AIRE" if i%2==0 else "T2 AIRE" 
             
         # Coordinadores (Tareas Admin)
         for idx in active_coords:
@@ -348,7 +335,7 @@ def logic_engine(df, no_tica_list):
             df_h.at[idx, 'Counter'] = cnt
             
         # Anfitriones
-        # Mínimo 2 por franja. Si hay menos, HHEE necesaria (se ve visualmente si hay huecos)
+        # Mínimo 2 por franja.
         for i, idx in enumerate(active_anfitriones):
             df_h.at[idx, 'Tarea'] = '1'
             df_h.at[idx, 'Counter'] = 'Zona Int' if i%2==0 else 'Zona Nac'
@@ -398,7 +385,7 @@ def make_excel(df):
         d_map[d] = col
         col += 26
         
-    # Ordenar: Agente -> Supervisor -> Coord -> Anfitrion
+    # Ordenar
     df_sorted = df[['Nombre', 'Rol', 'Role_Rank']].drop_duplicates().sort_values(['Role_Rank', 'Nombre'])
     
     row = 2
