@@ -8,12 +8,12 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V31 (Lógica Consistente)")
+st.title("✈️ Gestor de Turnos: V32 (Normalización Final)")
 st.markdown("""
-**Corrección V31:**
-1. **Coherencia Lugar/Tarea:** La columna 'Lugar' ahora muestra la **Base Asignada**, no el promedio de donde trabajó. Esto explica por qué alguien tiene tarea "Cubrir".
-2. **Limpieza Agentes:** Se restringe que los Agentes cubran Losa (Nac/Int) solo a casos de emergencia extrema.
-3. **Estabilidad:** Se reducen los movimientos innecesarios.
+**Mejoras V32:**
+1. **Limpieza de Tareas:** Si un agente cubre un puesto la mayor parte del día, se convierte en su puesto oficial (Tarea 1) y no "Cobertura".
+2. **Lugar Real:** La columna 'Lugar' refleja dónde trabajó efectivamente el colaborador.
+3. **Tarea 3:** Reservada exclusivamente para movimientos temporales (colaciones/apoyos breves).
 """)
 
 # --- PARSEO ---
@@ -134,7 +134,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V31 ---
+# --- MOTOR LÓGICO V32 ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -178,7 +178,7 @@ def logic_engine(df, no_tica_list):
                     'Nombre': r['Nombre'], 'Rol': r['Rol'], 'Turno_Raw': r['Turno_Raw'],
                     'Fecha': current_date, 'Hora': h, 'Tarea': '1', 'Counter': '?', 
                     'Role_Rank': role_rank, 'Sub_Group': sub_group, 'Start_H': start_h,
-                    'Base_Diaria': '?' # Se llena luego
+                    'Base_Diaria': '?'
                 })
     
     df_h = pd.DataFrame(rows)
@@ -235,7 +235,7 @@ def logic_engine(df, no_tica_list):
             works_midnight = not df_d_anf[(df_d_anf['Nombre'] == name) & (df_d_anf['Hora'] == 0)].empty
             if works_midnight and name in last_anf_zone: continuers.append(name)
             else: starters.append(name)
-            
+        
         for name in continuers:
             z = last_anf_zone[name]
             anf_base_assignments[(name, d)] = z
@@ -249,20 +249,6 @@ def logic_engine(df, no_tica_list):
             
         for name in active_anf:
             last_anf_zone[name] = anf_base_assignments[(name, d)]
-
-    # --- ESCRIBIR BASE EN DF PARA EXCEL ---
-    for idx, row in df_h.iterrows():
-        if row['Hora'] == -1: continue
-        d = row['Fecha']
-        n = row['Nombre']
-        r = row['Rol']
-        
-        if r == 'Agente':
-            df_h.at[idx, 'Base_Diaria'] = daily_assignments.get((n, d), "General")
-        elif r == 'Anfitrion':
-            df_h.at[idx, 'Base_Diaria'] = anf_base_assignments.get((n, d), "General")
-        else:
-            df_h.at[idx, 'Base_Diaria'] = "General"
 
     # 4. PRE-PROCESO COORDINADORES
     coords_active = df_h[(df_h['Rol'] == 'Coordinador') & (df_h['Hora'] != -1)]
@@ -329,14 +315,13 @@ def logic_engine(df, no_tica_list):
         
         empty_counters = [c for c, count in active_counts.items() if count == 0]
         
-        # C. Cobertura Agentes
         for target_cnt in empty_counters:
             covered = False
             # 1. Agente
             possible = []
             for d_idx in donors:
                 orig = df_h.at[d_idx, 'Counter']
-                if orig == target_cnt: continue # No cubrirse a si mismo (V31)
+                if orig == target_cnt: continue 
                 if active_counts.get(orig, 0) > 1:
                     d_nm = df_h.at[d_idx, 'Nombre']
                     if "AIRE" in target_cnt and (d_nm in no_tica_list): continue
@@ -381,12 +366,10 @@ def logic_engine(df, no_tica_list):
         
         zones_assigned = {'Nac': [], 'Int': []}
         for i, idx in enumerate(anf_avail):
-            # Usar la asignación base ya establecida
             z = df_h.at[idx, 'Counter']
-            # Re-validar si es Int o Nac para agrupar (puede ser General si falló)
-            if z not in zones_assigned: z = 'Int' # Fallback
+            if z not in zones_assigned: z = 'Int'
             zones_assigned[z].append(idx)
-            df_h.at[idx, 'Tarea'] = z # Tarea es zona para color
+            df_h.at[idx, 'Tarea'] = z 
             
         missing_nac = len(zones_assigned['Nac']) == 0
         missing_int = len(zones_assigned['Int']) == 0
@@ -394,15 +377,12 @@ def logic_engine(df, no_tica_list):
         
         if target_zone_name:
             filled = False
-            # 1. Mover interno
             other = 'Int' if target_zone_name == 'Nac' else 'Nac'
             if len(zones_assigned[other]) > 1:
                 cand = zones_assigned[other][0]
                 df_h.at[cand, 'Tarea'] = target_zone_name
-                df_h.at[cand, 'Counter'] = f"Zona {target_zone_name}" # Cambio lógico
+                df_h.at[cand, 'Counter'] = f"Zona {target_zone_name}"
                 filled = True
-            
-            # 2. Rescate externo
             if not filled:
                 avail_c = [i for i in idx_co if df_h.at[i, 'Tarea'] != 'C']
                 cand = None
@@ -410,22 +390,18 @@ def logic_engine(df, no_tica_list):
                 t1_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '1']
                 if t2_c: cand = t2_c[0]
                 elif t1_c and len(t1_c) > 1: cand = t1_c[0]
-                
                 if cand is not None:
                     df_h.at[cand, 'Tarea'] = f"Cubrir {target_zone_name}"
                     filled = True
-            
-            # 3. Agente (SOLO SI SOBRA MUCHO)
             if not filled:
                 for d_idx in donors:
                     orig = daily_assignments.get((df_h.at[d_idx, 'Nombre'], d))
                     if active_counts.get(orig, 0) > 1:
-                        df_h.at[d_idx, 'Tarea'] = f"Apoyo Losa {target_zone_name}"
+                        df_h.at[d_idx, 'Tarea'] = f"Cubrir {target_zone_name}"
                         active_counts[orig] -= 1
                         donors.remove(d_idx)
                         filled = True
                         break
-            
             if not filled:
                 hhee_anf.append({'Fecha': d, 'Hora': h, 'Counter': f"Zona {target_zone_name}"})
 
@@ -437,6 +413,39 @@ def logic_engine(df, no_tica_list):
             if df_h.at[idx, 'Tarea'] == '1': df_h.at[idx, 'Counter'] = 'General'
         for idx in idx_su:
             df_h.at[idx, 'Counter'] = 'General'; df_h.at[idx, 'Tarea'] = '1'
+
+    # --- FASE V32: NORMALIZACIÓN Y CÁLCULO FINAL DE BASE ---
+    # Recorrer todos los agentes y días para definir su Base_Diaria real
+    # según donde trabajaron más horas.
+    
+    final_bases = {} # (Nombre, Fecha) -> Base Calculada
+    
+    # Agrupar por Nombre y Fecha
+    grouped = df_h[df_h['Hora'] != -1].groupby(['Nombre', 'Fecha'])
+    
+    for (name, date), group in grouped:
+        # Contar frecuencia de counters (excluyendo Casino y Oficina si se quiere, o incluyendolos)
+        # Nos interesa el lugar físico de trabajo
+        valid_counts = group[~group['Counter'].isin(['Casino', 'Oficina', 'General'])]['Counter'].value_counts()
+        
+        if not valid_counts.empty:
+            real_base = valid_counts.index[0] # El más frecuente
+        else:
+            # Si solo estuvo en Oficina o Casino (raro), o General
+            real_base = group['Counter'].mode()[0]
+            
+        final_bases[(name, date)] = real_base
+        
+        # Limpieza de Tareas: Si tarea es "3: Cubrir X" y X == real_base, cambiar a "1"
+        for idx in group.index:
+            task = str(df_h.at[idx, 'Tarea'])
+            if "Cubrir" in task and real_base in task:
+                df_h.at[idx, 'Tarea'] = '1'
+                
+    # Actualizar la columna Base_Diaria en el DF para el Excel
+    for idx, row in df_h.iterrows():
+        if row['Hora'] != -1:
+            df_h.at[idx, 'Base_Diaria'] = final_bases.get((row['Nombre'], row['Fecha']), "-")
 
     # --- HHEE ROWS ---
     unique_dates = sorted(df_h['Fecha'].unique())
@@ -472,7 +481,7 @@ def logic_engine(df, no_tica_list):
 def make_excel(df):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V31")
+    ws = wb.add_worksheet("Sábana V32")
     
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
@@ -518,7 +527,6 @@ def make_excel(df):
     
     for _, p in df_sorted.iterrows():
         n, r, grp = p['Nombre'], p['Rol'], p['Sub_Group']
-        
         grp_label = f"{r.upper()}"
         if r == "Agente": grp_label += f" - {grp}"
         if r == "HHEE": grp_label = "REQUERIMIENTOS HHEE"
@@ -545,12 +553,11 @@ def make_excel(df):
             if r == "HHEE": t_raw = "Demanda"
             ws.write(row, c, str(t_raw), f_base)
             
-            # LUGAR: USAR BASE DIARIA (FIX V31)
+            # LUGAR: Usar Base Diaria CALCULADA
             active = subset[subset['Hora'] != -1]
             if active.empty and r != "HHEE":
                 ws.write(row, c+1, "Libre", f_libre)
             else:
-                # Usar la columna Base_Diaria en vez de la moda del counter
                 try:
                     base = subset.iloc[0]['Base_Diaria']
                     if pd.isna(base) or base=='?': base = active['Counter'].mode()[0]
@@ -574,7 +581,7 @@ def make_excel(df):
     wb.close()
     return out
 
-if st.button("🚀 Generar Planificación V31"):
+if st.button("🚀 Generar Planificación V32"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -589,4 +596,4 @@ if st.button("🚀 Generar Planificación V31"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V31.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V32.xlsx")
