@@ -8,12 +8,12 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V27 (Consistencia Visual)")
+st.title("✈️ Gestor de Turnos: V28 (Cobertura Cruzada Anfitriones)")
 st.markdown("""
-**Ajustes V27:**
-1. **Claridad Visual:** Si un Anfitrión cubre una zona vacía, se le asigna esa zona como su lugar de trabajo (Tarea 1), eliminando el texto redundante "Cubrir...".
-2. **Cobertura Garantizada:** Se mantiene la lógica de que Int y Nac siempre tengan al menos 1 persona (si hay personal).
-3. **Rescate:** Coordinadores y Agentes siguen cubriendo si faltan manos.
+**Reglas V28:**
+* **Anfitriones:** Se asignan bases fijas diarias.
+* **Tarea 3:** Si falta alguien en una zona, un compañero de la **otra zona** cubre el puesto (Ej: Int cubre Nac).
+* **Rescate:** Si no hay compañeros, activan Coordinadores o Agentes.
 """)
 
 # --- PARSEO ---
@@ -63,7 +63,6 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
             if isinstance(col, str) and ("nombre" in col.lower() or "cargo" in col.lower() or "supervisor" in col.lower()):
                 name_col = col
                 break
-        
         date_map = {}
         for col in df.columns:
             col_date = None
@@ -100,7 +99,7 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
     except Exception as e: st.error(f"Error en {role}: {e}")
     return pd.DataFrame(extracted_data)
 
-# --- UI LATERAL ---
+# --- UI ---
 st.sidebar.header("1. Periodo")
 today = datetime.now()
 date_range = st.sidebar.date_input("Rango", (today.replace(day=1), today.replace(day=15)), format="DD/MM/YYYY")
@@ -135,7 +134,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V27 ---
+# --- MOTOR LÓGICO V28 ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -174,7 +173,6 @@ def logic_engine(df, no_tica_list):
                 current_date = r['Fecha']
                 if start_h >= 18 and h < 12: 
                     current_date = current_date + timedelta(days=1)
-                
                 rows.append({
                     'Nombre': r['Nombre'], 'Rol': r['Rol'], 'Turno_Raw': r['Turno_Raw'],
                     'Fecha': current_date, 'Hora': h, 'Tarea': '1', 'Counter': '?', 
@@ -189,14 +187,48 @@ def logic_engine(df, no_tica_list):
     main_counters_tierra = ["T1 TIERRA", "T2 TIERRA"]
     daily_assignments = {} 
     
-    for d in df_h['Fecha'].unique():
-        active = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Agente') & (df_h['Hora'] != -1)]['Nombre'].unique()
-        load = {c: 0 for c in main_counters_aire + main_counters_tierra}
-        for ag_name in active:
+    # Memoria Anfitriones
+    anf_base_assignments = {} 
+    last_anf_zone = {} 
+    
+    sorted_dates = sorted(df_h['Fecha'].unique())
+    
+    for d in sorted_dates:
+        # A) Agentes
+        active_ag = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Agente') & (df_h['Hora'] != -1)]['Nombre'].unique()
+        load_ag = {c: 0 for c in main_counters_aire + main_counters_tierra}
+        for ag_name in active_ag:
             has_tica = ag_name not in no_tica_list
-            chosen = sorted(main_counters_tierra if not has_tica else main_counters_aire + main_counters_tierra, key=lambda c: load[c])[0]
-            load[chosen] += 1
+            chosen = sorted(main_counters_tierra if not has_tica else main_counters_aire + main_counters_tierra, key=lambda c: load_ag[c])[0]
+            load_ag[chosen] += 1
             daily_assignments[(ag_name, d)] = chosen
+            
+        # B) Anfitriones (Balanceo Inteligente)
+        df_d_anf = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Anfitrion') & (df_h['Hora'] != -1)]
+        active_anf = df_d_anf['Nombre'].unique()
+        zone_load = {'Zona Int': 0, 'Zona Nac': 0}
+        
+        # Prioridad continuidad noche
+        continuers = []
+        starters = []
+        for name in active_anf:
+            works_midnight = not df_d_anf[(df_d_anf['Nombre'] == name) & (df_d_anf['Hora'] == 0)].empty
+            if works_midnight and name in last_anf_zone: continuers.append(name)
+            else: starters.append(name)
+        
+        for name in continuers:
+            z = last_anf_zone[name]
+            anf_base_assignments[(name, d)] = z
+            zone_load[z] += 1
+            
+        starters.sort()
+        for name in starters:
+            z = 'Zona Int' if zone_load['Zona Int'] <= zone_load['Zona Nac'] else 'Zona Nac'
+            anf_base_assignments[(name, d)] = z
+            zone_load[z] += 1
+            
+        for name in active_anf:
+            last_anf_zone[name] = anf_base_assignments[(name, d)]
 
     # 4. PRE-PROCESO COORDINADORES
     coords_active = df_h[(df_h['Rol'] == 'Coordinador') & (df_h['Hora'] != -1)]
@@ -232,12 +264,16 @@ def logic_engine(df, no_tica_list):
         idx_an = g[g['Rol']=='Anfitrion'].index.tolist()
         idx_su = g[g['Rol']=='Supervisor'].index.tolist()
         
-        # A. Asignaciones Base
+        # A. Base
         for idx in idx_ag:
             base = daily_assignments.get((df_h.at[idx, 'Nombre'], d), "General")
             df_h.at[idx, 'Counter'] = base
             df_h.at[idx, 'Tarea'] = '1'
-            
+        for idx in idx_an:
+            base = anf_base_assignments.get((df_h.at[idx, 'Nombre'], d), "General")
+            df_h.at[idx, 'Counter'] = base
+            df_h.at[idx, 'Tarea'] = '1'
+
         def apply_break(indices, start_range, slots):
             cands = [i for i in indices if start_range[0] <= df_h.at[i, 'Start_H'] <= start_range[1]]
             for i, idx in enumerate(cands):
@@ -279,7 +315,7 @@ def logic_engine(df, no_tica_list):
                 active_counts[target_cnt] += 1
                 donors.remove(best)
                 covered = True
-            # 2. Coordinador
+            # 2. Coord
             if not covered:
                 avail_c = [i for i in idx_co if df_h.at[i, 'Tarea'] != 'C']
                 t1_rem = len([i for i in avail_c if df_h.at[i, 'Tarea'] == '1'])
@@ -292,7 +328,7 @@ def logic_engine(df, no_tica_list):
                     df_h.at[cand, 'Tarea'] = f"4: Cubrir {target_cnt}"
                     df_h.at[cand, 'Counter'] = target_cnt
                     covered = True
-            # 3. Anfitrión
+            # 3. Anfitrion
             if not covered and idx_an:
                 avail_a = [i for i in idx_an if df_h.at[i, 'Tarea'] != 'C']
                 if len(avail_a) > 2:
@@ -303,44 +339,39 @@ def logic_engine(df, no_tica_list):
             if not covered:
                 hhee_counters.append({'Fecha': d, 'Hora': h, 'Counter': target_cnt})
 
-        # D. Cobertura Anfitriones (Lógica V27 - Limpia)
+        # D. Cobertura Anfitriones (Lógica V28)
+        current_anf_status = {'Zona Int': 0, 'Zona Nac': 0}
+        active_anf_list = [] # Solo Tarea 1 (disponibles)
         
-        # 1. Asignar base (balanceada al vuelo para evitar rigidez)
-        active_anf = [i for i in idx_an if df_h.at[i, 'Tarea'] == '1']
-        anf_zones = {'Zona Int': 0, 'Zona Nac': 0}
+        for idx in idx_an:
+            if df_h.at[idx, 'Tarea'] == '1':
+                z = df_h.at[idx, 'Counter']
+                current_anf_status[z] += 1
+                active_anf_list.append(idx)
         
-        # Repartir
-        for i, idx in enumerate(active_anf):
-            zone = 'Zona Int' if i % 2 == 0 else 'Zona Nac'
-            df_h.at[idx, 'Counter'] = zone
-            anf_zones[zone] += 1
-            
-        # 2. Detectar Huecos y Mover
-        missing_zones = [z for z, count in anf_zones.items() if count == 0]
+        missing_zones = [z for z, count in current_anf_status.items() if count == 0]
         
         for zone in missing_zones:
             filled = False
-            # a. Mover Anfitrión (Interno) - SIN TEXTO "CUBRIR"
+            # 1. Tarea 3: Anfitrión CRUZADO
             other = 'Zona Nac' if zone == 'Zona Int' else 'Zona Int'
-            if anf_zones.get(other, 0) > 1:
-                # Buscar a alguien en la otra zona
-                cands = [i for i in active_anf if df_h.at[i, 'Counter'] == other]
+            if current_anf_status.get(other, 0) > 1:
+                cands = [i for i in active_anf_list if df_h.at[i, 'Counter'] == other]
                 if cands:
                     cand = cands[0]
-                    # Aquí la magia V27: Lo movemos, pero lo dejamos en Tarea 1
-                    df_h.at[cand, 'Counter'] = zone 
-                    df_h.at[cand, 'Tarea'] = '1' # Queda como su puesto normal
-                    anf_zones[other] -= 1
-                    anf_zones[zone] += 1
+                    df_h.at[cand, 'Tarea'] = f"3: Cubrir {zone}"
+                    df_h.at[cand, 'Counter'] = zone # Se mueve
+                    current_anf_status[other] -= 1
+                    current_anf_status[zone] += 1
                     filled = True
             
-            # b. Rescate Externo (Coord/Agente) - AQUÍ SÍ USA "CUBRIR"
+            # 2. Coordinador
             if not filled:
                 avail_c = [i for i in idx_co if df_h.at[i, 'Tarea'] != 'C']
                 cand = None
+                t1_rem = len([i for i in avail_c if df_h.at[i, 'Tarea'] == '1'])
                 t2_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '2']
                 t1_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '1']
-                t1_rem = len(t1_c)
                 if t2_c: cand = t2_c[0]
                 elif t1_c and t1_rem > 1: cand = t1_c[0]
                 
@@ -349,6 +380,7 @@ def logic_engine(df, no_tica_list):
                     df_h.at[cand, 'Counter'] = zone
                     filled = True
             
+            # 3. Agente
             if not filled:
                 for d_idx in donors:
                     orig = daily_assignments.get((df_h.at[d_idx, 'Nombre'], d))
@@ -372,7 +404,7 @@ def logic_engine(df, no_tica_list):
         for idx in idx_su:
             df_h.at[idx, 'Counter'] = 'General'; df_h.at[idx, 'Tarea'] = '1'
 
-    # --- HHEE ROWS ---
+    # --- HHEE ---
     unique_dates = sorted(df_h['Fecha'].unique())
     hhee_set = set((x['Fecha'], x['Hora'], x['Counter']) for x in hhee_counters)
     for cnt in ["T1 AIRE", "T1 TIERRA", "T2 AIRE", "T2 TIERRA"]:
@@ -406,7 +438,7 @@ def logic_engine(df, no_tica_list):
 def make_excel(df):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V27")
+    ws = wb.add_worksheet("Sábana V28")
     
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
@@ -447,7 +479,6 @@ def make_excel(df):
     
     for _, p in df_sorted.iterrows():
         n, r, grp = p['Nombre'], p['Rol'], p['Sub_Group']
-        
         grp_label = f"{r.upper()}"
         if r == "Agente": grp_label += f" - {grp}"
         if r == "HHEE": grp_label = "REQUERIMIENTOS HHEE"
@@ -474,6 +505,7 @@ def make_excel(df):
             if r == "HHEE": t_raw = "Demanda"
             ws.write(row, c, str(t_raw), f_base)
             
+            # Place Logic: Use mode, but if HHEE, explicit
             active = subset[subset['Hora'] != -1]
             if active.empty and r != "HHEE":
                 ws.write(row, c+1, "Libre", f_libre)
@@ -500,7 +532,7 @@ def make_excel(df):
     wb.close()
     return out
 
-if st.button("🚀 Generar Planificación V27"):
+if st.button("🚀 Generar Planificación V28"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -515,4 +547,4 @@ if st.button("🚀 Generar Planificación V27"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V27.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V28.xlsx")
