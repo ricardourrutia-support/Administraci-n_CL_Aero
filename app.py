@@ -8,13 +8,13 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: Reglas V6 (Filtro Fechas + Tarea 3)")
+st.title("✈️ Gestor de Turnos: Reglas V7 (Estable)")
 st.markdown("""
-**Nuevas Funcionalidades:**
-1. **Rango de Fechas:** Selecciona días específicos del mes.
-2. **Sin TICA:** Carga agentes y restringe su asignación a Tierra.
-3. **Clasificación:** Agentes separados en Diurno (AM) y Nocturno (PM).
-4. **Tarea 3:** Lógica específica para cubrir quiebres por colación.
+**Estado Actual:**
+1. **Rango de Fechas:** Filtro activo.
+2. **Sin TICA:** Selector manual (Agentes van a Tierra).
+3. **Clasificación:** Agentes Diurno (AM) y Nocturno (PM).
+4. **Tarea 3:** Cobertura de quiebres por colación (Aire cubre Tierra / Tierra cubre Aire).
 """)
 
 # --- PARSEO DE FECHAS Y HORAS ---
@@ -98,14 +98,12 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
             elif header_type == 'number':
                 try: 
                     # Asumimos que el usuario selecciona el año/mes correcto en el filtro
-                    # Usamos el mes/año del start_date seleccionado
                     d_num = int(float(col))
                     col_date = datetime(start_date.year, start_date.month, d_num)
                 except: pass
             
             # FILTRO DE FECHAS
             if col_date:
-                # Convertir a date para comparar
                 c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
                 if start_date <= c_dt <= end_date:
                     date_map[col] = col_date
@@ -159,8 +157,8 @@ for fconf in files_config:
         try:
             xl = pd.ExcelFile(file)
             sheets = xl.sheet_names
-            # Intentar adivinar la hoja por el mes seleccionado en el rango
-            month_name_guess = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto"][start_d.month] if start_d else ""
+            # Intentar adivinar la hoja por el mes seleccionado
+            month_name_guess = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"][start_d.month] if start_d else ""
             def_ix = next((i for i, s in enumerate(sheets) if month_name_guess.lower() in s.lower()), 0)
             sel_sheet = st.sidebar.selectbox(f"Hoja ({role})", sheets, index=def_ix, key=f"{role}_sheet")
             uploaded_sheets[role] = (file, sel_sheet)
@@ -191,7 +189,7 @@ if 'exec' in uploaded_sheets and start_d and end_d:
 else:
     st.sidebar.info("Sube Agentes y define fechas para configurar TICA.")
 
-# --- MOTOR LÓGICO V6 ---
+# --- MOTOR LÓGICO V7 (CORREGIDO) ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -314,11 +312,10 @@ def logic_engine(df, no_tica_list):
         # --- D. TAREA 3: COBERTURA DE QUIEBRE (Solo si hay quiebre) ---
         for cnt_name, covered in counters_status.items():
             if not covered:
-                # ¡ALERTA! Quiebre detectado (por Colación probablemente)
+                # ¡ALERTA! Quiebre detectado
                 filled = False
                 
                 # Buscar un Flotante (Spare) para Tarea 3
-                # REGLA: Tarea 3 es cubrir quiebre.
                 
                 # Intentar cubrir Aire
                 if "AIRE" in cnt_name and spare_with_tica:
@@ -340,23 +337,24 @@ def logic_engine(df, no_tica_list):
                         df_h.at[idx, 'Tarea'] = '3'
                         filled = True
 
-                # Si no hay agentes flotantes, usar Coordinador/Anfitrión (Tarea 4)
+                # Si no hay agentes flotantes, usar Coordinador (Tarea 4)
                 if not filled and active_coords:
                     idx = active_coords[0]
                     df_h.at[idx, 'Counter'] = cnt_name
                     df_h.at[idx, 'Tarea'] = '4'
                     active_coords.pop(0)
                     filled = True
+                
+                # Si no hay coordinador, usar Anfitrión (Tarea 4)
                 elif not filled and active_anfitriones:
-                    idx = active_anfitriones.pop(0)
+                    idx = active_anfitriones.pop(0) # CORREGIDO: Solo un pop
                     df_h.at[idx, 'Counter'] = cnt_name
                     df_h.at[idx, 'Tarea'] = '4'
-                    active_anfitriones.pop(0)
                     filled = True
 
         # --- E. ASIGNAR SOBRANTES (RESTO DE TAREAS) ---
         
-        # Agentes que sobraron y NO hicieron Tarea 3 -> Refuerzo (Tarea 1)
+        # Agentes Sobrantes
         for idx in spare_no_tica:
             df_h.at[idx, 'Tarea'] = '1'
             df_h.at[idx, 'Counter'] = "Refuerzo Tierra"
@@ -369,7 +367,6 @@ def logic_engine(df, no_tica_list):
             st_h = df_h.at[idx, 'Start_H']
             task = '1'
             cnt = 'Piso'
-            # Heurística Tarea 2
             if st_h == 10 and (h == 10 or h in [14, 15]): task = '2'; cnt = 'Oficina'
             elif st_h == 5 and (h in [6, 7]): task = '2'; cnt = 'Oficina'
             df_h.at[idx, 'Tarea'] = task
@@ -469,7 +466,7 @@ def make_excel(df):
     return out
 
 # --- EJECUCIÓN ---
-if st.button("🚀 Generar Planificación V6"):
+if st.button("🚀 Generar Planificación V7"):
     if not uploaded_sheets:
         st.error("Carga los archivos.")
     elif not (start_d and end_d):
@@ -485,4 +482,4 @@ if st.button("🚀 Generar Planificación V6"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Planificación Creada!")
-                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V6.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V7.xlsx")
