@@ -8,15 +8,15 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V24 (Zona Base Anfitriones)")
+st.title("✈️ Gestor de Turnos: V25 (Continuidad de Zonas)")
 st.markdown("""
-**Mejoras V24:**
-1. **Zona Base Fija:** Los anfitriones tienen una zona asignada para todo el día (Int o Nac).
-2. **Tarea 3 Visible:** Si un anfitrión debe cambiar de zona para cubrir un hueco, aparecerá explícitamente como "3: Cubrir...".
-3. **Rescate:** Coordinadores y Agentes siguen apoyando si faltan anfitriones.
+**Mejoras V25:**
+1. **Continuidad de Zona:** Si un anfitrión cruza la medianoche, mantiene su zona (Int/Nac) del día anterior. Evita "auto-coberturas" confusas.
+2. **Estabilidad:** Menos cambios aleatorios de zona al iniciar el día.
+3. **Reglas:** Se mantienen todas las lógicas de HHEE y rescate.
 """)
 
-# --- PARSEO ROBUSTO ---
+# --- PARSEO ---
 def parse_shift_time(shift_str):
     if pd.isna(shift_str): return [], None
     s = str(shift_str).lower().strip()
@@ -28,7 +28,6 @@ def parse_shift_time(shift_str):
     
     start_h = -1
     end_h = -1
-    
     if match:
         try:
             start_h = int(match.group(1))
@@ -57,9 +56,7 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
         file.seek(0)
         df_raw = pd.read_excel(file, sheet_name=sheet_name, header=None)
         header_idx, header_type = find_date_header_row(df_raw)
-        
         if header_idx is None: return pd.DataFrame()
-            
         df = pd.read_excel(file, sheet_name=sheet_name, header=header_idx)
         name_col = df.columns[0]
         for col in df.columns:
@@ -80,7 +77,6 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
                     d_num = int(float(col))
                     col_date = datetime(start_date.year, start_date.month, d_num)
                 except: pass
-            
             if col_date:
                 c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
                 if start_date <= c_dt <= end_date:
@@ -139,7 +135,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V24 ---
+# --- MOTOR LÓGICO V25 ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -156,7 +152,7 @@ def logic_engine(df, no_tica_list):
                 else: pm += 1
         agent_class[name] = "Nocturno" if pm > am else "Diurno"
 
-    # 2. EXPANDIR
+    # 2. EXPANDIR (Cruce día)
     for _, r in df.iterrows():
         hours, start_h = parse_shift_time(r['Turno_Raw'])
         sub_group = "General"
@@ -188,13 +184,19 @@ def logic_engine(df, no_tica_list):
     df_h = pd.DataFrame(rows)
     if df_h.empty: return df_h
     
-    # 3. COUNTERS DIARIOS (ASIGNACIÓN BASE)
+    # 3. COUNTERS DIARIOS (ASIGNACIÓN BASE CON MEMORIA)
     main_counters_aire = ["T1 AIRE", "T2 AIRE"]
     main_counters_tierra = ["T1 TIERRA", "T2 TIERRA"]
-    daily_assignments = {} # (Nombre, Fecha) -> Counter Base (Agentes)
-    anf_base_assignments = {} # (Nombre, Fecha) -> Zona Base (Anfitriones)
     
-    for d in df_h['Fecha'].unique():
+    daily_assignments = {} # (Nombre, Fecha) -> Counter (Agentes)
+    anf_base_assignments = {} # (Nombre, Fecha) -> Zona (Anfitriones)
+    
+    # Memoria para continuidad
+    last_anf_zone = {} # Nombre -> Zona
+    
+    sorted_dates = sorted(df_h['Fecha'].unique())
+    
+    for d in sorted_dates:
         # A) Agentes
         active_ag = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Agente') & (df_h['Hora'] != -1)]['Nombre'].unique()
         load_ag = {c: 0 for c in main_counters_aire + main_counters_tierra}
@@ -204,12 +206,46 @@ def logic_engine(df, no_tica_list):
             load_ag[chosen] += 1
             daily_assignments[(ag_name, d)] = chosen
             
-        # B) Anfitriones (Nuevo V24: Asignación Fija Diaria)
-        active_anf = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Anfitrion') & (df_h['Hora'] != -1)]['Nombre'].unique()
-        # Balanceo simple: Uno a Int, Uno a Nac
-        for i, anf_name in enumerate(active_anf):
-            zone = 'Zona Int' if i % 2 == 0 else 'Zona Nac'
-            anf_base_assignments[(anf_name, d)] = zone
+        # B) Anfitriones (CON MEMORIA V25)
+        # Seleccionar anfitriones activos este día
+        df_d_anf = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Anfitrion') & (df_h['Hora'] != -1)]
+        active_anf = df_d_anf['Nombre'].unique()
+        
+        # Contadores para balancear lo NUEVO
+        zone_load = {'Zona Int': 0, 'Zona Nac': 0}
+        
+        # 1. Asignar primero a los que continúan turno (empiezan 00:00)
+        #    Si tienen start_h alto (ayer) y hora 0, o simplemente si hora 0 está presente.
+        
+        continuing_anf = []
+        new_anf = []
+        
+        for name in active_anf:
+            # Check si este agente tiene hora 0 hoy
+            has_midnight = not df_d_anf[(df_d_anf['Nombre'] == name) & (df_d_anf['Hora'] == 0)].empty
+            if has_midnight and name in last_anf_zone:
+                continuing_anf.append(name)
+            else:
+                new_anf.append(name)
+                
+        # Asignar CONTINUIDAD
+        for name in continuing_anf:
+            prev_zone = last_anf_zone[name]
+            anf_base_assignments[(name, d)] = prev_zone
+            zone_load[prev_zone] += 1
+            
+        # Asignar NUEVOS (Balanceado)
+        # Ordenamos para determinismo
+        new_anf.sort()
+        for name in new_anf:
+            # Elegir la zona con menos carga
+            chosen = 'Zona Int' if zone_load['Zona Int'] <= zone_load['Zona Nac'] else 'Zona Nac'
+            anf_base_assignments[(name, d)] = chosen
+            zone_load[chosen] += 1
+            
+        # Actualizar memoria para mañana (guardamos la zona de hoy)
+        for name in active_anf:
+            last_anf_zone[name] = anf_base_assignments[(name, d)]
 
     # 4. PRE-PROCESO COORDINADORES
     coords_active = df_h[(df_h['Rol'] == 'Coordinador') & (df_h['Hora'] != -1)]
@@ -218,7 +254,6 @@ def logic_engine(df, no_tica_list):
         h = row['Hora']
         nm = row['Nombre']
         is_odd = hash(nm) % 2 != 0
-        
         if st_h == 10:
             if h == 10: df_h.at[idx, 'Tarea'] = '2'; df_h.at[idx, 'Counter'] = 'Oficina'
             elif h in [14, 15]:
@@ -246,7 +281,7 @@ def logic_engine(df, no_tica_list):
         idx_an = g[g['Rol']=='Anfitrion'].index.tolist()
         idx_su = g[g['Rol']=='Supervisor'].index.tolist()
         
-        # A. Asignaciones Base (Agentes y Anfitriones)
+        # A. Asignaciones Base
         for idx in idx_ag:
             base = daily_assignments.get((df_h.at[idx, 'Nombre'], d), "General")
             df_h.at[idx, 'Counter'] = base
@@ -278,10 +313,10 @@ def logic_engine(df, no_tica_list):
                     active_counts[c] += 1
                     donors.append(idx)
         
-        empty_counters = [c for c, count in active_counts.items() if count == 0]
+        empty = [c for c, count in active_counts.items() if count == 0]
         
         # C. Cobertura Counters
-        for target_cnt in empty_counters:
+        for target_cnt in empty:
             covered = False
             # 1. Agente
             possible = []
@@ -299,7 +334,6 @@ def logic_engine(df, no_tica_list):
                 active_counts[target_cnt] += 1
                 donors.remove(best)
                 covered = True
-            
             # 2. Coordinador
             if not covered:
                 avail_c = [i for i in idx_co if df_h.at[i, 'Tarea'] != 'C']
@@ -313,7 +347,6 @@ def logic_engine(df, no_tica_list):
                     df_h.at[cand, 'Tarea'] = f"4: Cubrir {target_cnt}"
                     df_h.at[cand, 'Counter'] = target_cnt
                     covered = True
-            
             # 3. Anfitrión
             if not covered and idx_an:
                 avail_a = [i for i in idx_an if df_h.at[i, 'Tarea'] != 'C']
@@ -326,54 +359,47 @@ def logic_engine(df, no_tica_list):
             if not covered:
                 hhee_counters.append({'Fecha': d, 'Hora': h, 'Counter': target_cnt})
 
-        # D. Cobertura Anfitriones (V24: Usando Base Fija)
-        
-        # Contar estado actual basado en Tarea 1
+        # D. Cobertura Anfitriones
+        # Recalcular estado actual real
         current_anf_status = {'Zona Int': 0, 'Zona Nac': 0}
-        active_anf_list = [] # Solo los que están en Tarea 1
-        
+        active_anf_list = []
         for idx in idx_an:
             if df_h.at[idx, 'Tarea'] == '1':
                 z = df_h.at[idx, 'Counter']
                 current_anf_status[z] += 1
                 active_anf_list.append(idx)
-                
-        # Detectar Huecos (Zonas con 0)
+        
         missing_zones = [z for z, count in current_anf_status.items() if count == 0]
         
         for zone in missing_zones:
             filled = False
-            
-            # 1. Tarea 3: Mover Anfitrión de la otra zona (si sobran)
+            # 1. Tarea 3: Interna
             other = 'Zona Nac' if zone == 'Zona Int' else 'Zona Int'
             if current_anf_status.get(other, 0) > 1:
-                # Buscar candidato en la otra zona
                 cands = [i for i in active_anf_list if df_h.at[i, 'Counter'] == other]
                 if cands:
                     cand = cands[0]
                     df_h.at[cand, 'Tarea'] = f"3: Cubrir {zone}"
-                    df_h.at[cand, 'Counter'] = zone # Visualmente se mueve
+                    df_h.at[cand, 'Counter'] = zone
                     current_anf_status[other] -= 1
                     current_anf_status[zone] += 1
                     filled = True
             
-            # 2. Tarea 4: Coordinador
+            # 2. Coord
             if not filled:
                 avail_c = [i for i in idx_co if df_h.at[i, 'Tarea'] != 'C']
                 cand = None
                 t1_rem = len([i for i in avail_c if df_h.at[i, 'Tarea'] == '1'])
                 t2_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '2']
                 t1_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '1']
-                
                 if t2_c: cand = t2_c[0]
                 elif t1_c and t1_rem > 1: cand = t1_c[0]
-                
                 if cand is not None:
                     df_h.at[cand, 'Tarea'] = f"4: Cubrir {zone}"
                     df_h.at[cand, 'Counter'] = zone
                     filled = True
             
-            # 3. Tarea 4: Agente
+            # 3. Agente
             if not filled:
                 for d_idx in donors:
                     orig = daily_assignments.get((df_h.at[d_idx, 'Nombre'], d))
@@ -397,9 +423,8 @@ def logic_engine(df, no_tica_list):
         for idx in idx_su:
             df_h.at[idx, 'Counter'] = 'General'; df_h.at[idx, 'Tarea'] = '1'
 
-    # --- HHEE ---
+    # --- HHEE ROWS ---
     unique_dates = sorted(df_h['Fecha'].unique())
-    
     hhee_set = set((x['Fecha'], x['Hora'], x['Counter']) for x in hhee_counters)
     for cnt in ["T1 AIRE", "T1 TIERRA", "T2 AIRE", "T2 TIERRA"]:
         base_row = {'Nombre': f"HHEE {cnt}", 'Rol': 'HHEE', 'Sub_Group': 'Counter', 'Role_Rank': 900, 'Turno_Raw': 'Demanda', 'Start_H': -1, 'Counter': cnt}
@@ -432,7 +457,7 @@ def logic_engine(df, no_tica_list):
 def make_excel(df):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V24")
+    ws = wb.add_worksheet("Sábana V25")
     
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
@@ -473,6 +498,7 @@ def make_excel(df):
     
     for _, p in df_sorted.iterrows():
         n, r, grp = p['Nombre'], p['Rol'], p['Sub_Group']
+        
         grp_label = f"{r.upper()}"
         if r == "Agente": grp_label += f" - {grp}"
         if r == "HHEE": grp_label = "REQUERIMIENTOS HHEE"
@@ -499,7 +525,6 @@ def make_excel(df):
             if r == "HHEE": t_raw = "Demanda"
             ws.write(row, c, str(t_raw), f_base)
             
-            # Place
             active = subset[subset['Hora'] != -1]
             if active.empty and r != "HHEE":
                 ws.write(row, c+1, "Libre", f_libre)
@@ -509,7 +534,6 @@ def make_excel(df):
                     else: ws.write(row, c+1, active['Counter'].mode()[0], f_base)
                 except: ws.write(row, c+1, "?", f_base)
             
-            # Hours
             for h in range(24):
                 try:
                     val = df_idx.loc[(n, d, h)]
@@ -527,7 +551,7 @@ def make_excel(df):
     wb.close()
     return out
 
-if st.button("🚀 Generar Planificación V24"):
+if st.button("🚀 Generar Planificación V25"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -542,4 +566,4 @@ if st.button("🚀 Generar Planificación V24"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V24.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V25.xlsx")
