@@ -8,35 +8,52 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V20 (Estable Final)")
+st.title("✈️ Gestor de Turnos: V21 (Parser Restaurado + Lógica Final)")
 st.markdown("""
-**Corrección V20:**
-* Solucionado error técnico (KeyError) al mover agentes a Zona Losa.
-* Reglas de cobertura y horarios OFF mantenidas.
+**Versión Definitiva V21:**
+1. **Lectura Correcta:** Soporta formatos `10:00:00 - 21:00:00` (Restaurado de V18).
+2. **Lógica Robusta:** Incluye corrección de Anfitriones, HHEE y manejo de errores (V20).
 """)
 
-# --- PARSEO ---
+# --- PARSEO ROBUSTO V18 (RESTAURADO) ---
 def parse_shift_time(shift_str):
+    """
+    Parser capaz de leer '10:00:00 - 21:00:00', '10 - 21', '10 a 21'.
+    Ignora minutos y segundos para obtener el bloque horario.
+    """
     if pd.isna(shift_str): return [], None
     s = str(shift_str).lower().strip()
+    
+    # Filtros de inactividad
     if s == "" or any(x in s for x in ['libre', 'nan', 'l', 'x', 'vacaciones', 'licencia', 'falla', 'domingos libres', 'festivo', 'feriado']):
         return [], None
     
-    s = s.replace(" diurno", "").replace(" nocturno", "").replace("hrs", "").replace("horas", "").replace("de", "").replace("a", "-").replace(":", ".")
-    match = re.search(r'(\d{1,2})(?:\.(\d{2}))?\s*(?:-|a|–|to)\s*(\d{1,2})(?:\.(\d{2}))?', s)
+    # Normalización de separadores
+    s = s.replace(" diurno", "").replace(" nocturno", "").replace("hrs", "").replace("horas", "").replace("de", "").replace("a", "-").replace("–", "-").replace("to", "-")
+    
+    # REGEX V18: Captura hora inicial y final ignorando :MM:SS
+    # (\d{1,2})       -> Hora
+    # (?:[:.]\d+)* -> Consume :00 o .00 pasivamente
+    match = re.search(r'(\d{1,2})(?:[:.]\d+)*\s*-\s*(\d{1,2})(?:[:.]\d+)*', s)
     
     start_h = -1
     end_h = -1
+    
     if match:
         try:
             start_h = int(match.group(1))
-            end_h = int(match.group(3))
+            end_h = int(match.group(2))
+            
+            # Validación de rango
             if 0 <= start_h <= 24 and 0 <= end_h <= 24:
                 if start_h < end_h:
                     return list(range(start_h, end_h)), start_h
-                elif start_h > end_h:
+                elif start_h > end_h: # Turno noche (cruce)
                     return list(range(start_h, 24)) + list(range(0, end_h)), start_h
+                else:
+                    return [], None # Inicio == Fin
         except: pass
+        
     return [], None
 
 def find_date_header_row(df):
@@ -59,6 +76,7 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
         if header_idx is None: return pd.DataFrame()
             
         df = pd.read_excel(file, sheet_name=sheet_name, header=header_idx)
+        
         name_col = df.columns[0]
         for col in df.columns:
             if isinstance(col, str) and ("nombre" in col.lower() or "cargo" in col.lower() or "supervisor" in col.lower()):
@@ -89,7 +107,7 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
             if pd.isna(name_val): continue
             s_name = str(name_val).strip()
             if s_name == "" or len(s_name) < 3: continue
-            if any(k in s_name.lower() for k in ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas"]): continue
+            if any(k in s_name.lower() for k in ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas", "resumen"]): continue
             if s_name.replace('.', '', 1).isdigit(): continue
 
             clean_name = s_name.title()
@@ -137,7 +155,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V20 ---
+# --- MOTOR LÓGICO V21 ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -173,6 +191,7 @@ def logic_engine(df, no_tica_list):
                          'Role_Rank': role_rank, 'Sub_Group': sub_group, 'Start_H': -1})
         else:
             for h in hours:
+                # Cruce de día (Corrección V17 integrada)
                 current_date = r['Fecha']
                 if start_h >= 18 and h < 12: 
                     current_date = current_date + timedelta(days=1)
@@ -249,10 +268,11 @@ def logic_engine(df, no_tica_list):
         
         apply_break(idx_ag, (0, 11), [13, 14]) 
         apply_break(idx_ag, (12, 23), [2, 3]) 
+        # Anfitriones V19 (4 AM)
         apply_break(idx_an, (0, 11), [13, 14, 15])
-        apply_break(idx_an, (12, 23), [2, 3, 4]) # 02, 03, 04
+        apply_break(idx_an, (12, 23), [2, 3, 4])
 
-        # B. Quiebres Agentes
+        # B. Quiebres
         active_counts = {c: 0 for c in main_counters_aire + main_counters_tierra}
         donors = [] 
         for idx in idx_ag:
@@ -262,10 +282,10 @@ def logic_engine(df, no_tica_list):
                     active_counts[c] += 1
                     donors.append(idx)
         
-        empty_counters = [c for c, count in active_counts.items() if count == 0]
+        empty = [c for c, count in active_counts.items() if count == 0]
         
-        # C. Cobertura Counters
-        for target_cnt in empty_counters:
+        # C. Cobertura
+        for target_cnt in empty:
             covered = False
             
             # 1. Agente Flotante
@@ -303,7 +323,6 @@ def logic_engine(df, no_tica_list):
             # 3. Anfitrión
             if not covered and idx_an:
                 avail_a = [i for i in idx_an if df_h.at[i, 'Tarea'] != 'C']
-                # Regla: Deben quedar 2. Si tengo 3, uso 1.
                 if len(avail_a) > 2:
                     ix = avail_a[0]
                     df_h.at[ix, 'Tarea'] = f"4: Cubrir {target_cnt}"
@@ -313,7 +332,7 @@ def logic_engine(df, no_tica_list):
             if not covered:
                 hhee_counters.append({'Fecha': d, 'Hora': h, 'Counter': target_cnt})
 
-        # D. Cobertura Anfitriones (Losa V19/V20)
+        # D. Cobertura Anfitriones
         active_anf = [i for i in idx_an if df_h.at[i, 'Tarea'] == '1']
         needed_anf = 2 - len(active_anf)
         
@@ -334,7 +353,7 @@ def logic_engine(df, no_tica_list):
                     needed_anf -= 1
                 else: break
             
-            # 2. Agentes (FIX V20: CAPTURAR COUNTER ORIGEN)
+            # 2. Agentes (Fix V20 KeyError)
             if needed_anf > 0:
                 for _ in range(needed_anf):
                     cand = None
@@ -345,10 +364,10 @@ def logic_engine(df, no_tica_list):
                             break
                     
                     if cand is not None:
-                        origin_cnt = df_h.at[cand, 'Counter'] # <-- CAPTURA SEGURA
+                        origin_cnt = df_h.at[cand, 'Counter']
                         df_h.at[cand, 'Tarea'] = "4: Cubrir Anfitrión"
                         df_h.at[cand, 'Counter'] = "Zona Losa"
-                        active_counts[origin_cnt] -= 1 # <-- USO SEGURO
+                        active_counts[origin_cnt] -= 1
                         donors.remove(cand)
                         needed_anf -= 1
                     else: break
@@ -356,7 +375,7 @@ def logic_engine(df, no_tica_list):
             if needed_anf > 0:
                 hhee_anf.append({'Fecha': d, 'Hora': h, 'Counter': 'Losa Minima'})
 
-        # E. Reglas Finales
+        # E. Finales
         coords_t1 = [i for i in idx_co if df_h.at[i, 'Tarea'] == '1']
         if not coords_t1: hhee_coord.append({'Fecha': d, 'Hora': h, 'Counter': 'Supervisión'})
             
@@ -403,7 +422,7 @@ def logic_engine(df, no_tica_list):
 def make_excel(df):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V20")
+    ws = wb.add_worksheet("Sábana V21")
     
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
@@ -498,7 +517,7 @@ def make_excel(df):
     wb.close()
     return out
 
-if st.button("🚀 Generar Planificación V20"):
+if st.button("🚀 Generar Planificación V21"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -513,4 +532,4 @@ if st.button("🚀 Generar Planificación V20"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V20.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V21.xlsx")
