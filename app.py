@@ -8,12 +8,13 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: Reglas de Negocio V4 (Corregido)")
+st.title("✈️ Gestor de Turnos: Reglas V5 (Corrección TICA y Crash)")
 st.markdown("""
-**Reglas Actualizadas (Doc 1):**
-* **Agentes:** Cobertura cruzada Aire/Tierra. Selector para agentes **Sin TICA**.
-* **Anfitriones:** Mínimo 2 por franja.
-* **HHEE:** Se asignan automáticamente si no se cumple la cobertura mínima.
+**Instrucciones:**
+1. Sube los archivos de turnos.
+2. En la barra lateral, presiona **"🔄 Cargar Nombres de Agentes"** para habilitar el selector SIN TICA.
+3. Selecciona los agentes sin credencial.
+4. Genera la planificación.
 """)
 
 # --- PARSEO ---
@@ -72,7 +73,7 @@ def process_file_sheet(file, sheet_name, role, target_month, target_year):
         header_idx, header_type = find_date_header_row(df_raw)
         
         if header_idx is None:
-            st.warning(f"⚠️ No se detectaron fechas en '{sheet_name}' ({role}).")
+            # st.warning(f"⚠️ No se detectaron fechas en '{sheet_name}' ({role}).")
             return pd.DataFrame()
             
         df = pd.read_excel(file, sheet_name=sheet_name, header=header_idx)
@@ -139,24 +140,38 @@ for fconf in files_config:
             uploaded_sheets[role] = (file, sel_sheet)
         except: pass
 
-# --- SELECTOR SIN TICA ---
+# --- SELECTOR SIN TICA (FUNCIONALIDAD CORREGIDA) ---
 st.sidebar.markdown("---")
-st.sidebar.header("2. Excepciones")
+st.sidebar.header("2. Excepciones (TICA)")
 agents_no_tica = []
+
 if 'exec' in uploaded_sheets:
-    # Carga preliminar para obtener nombres
-    if st.sidebar.checkbox("Cargar lista de Agentes para seleccionar SIN TICA"):
-        with st.spinner("Leyendo nombres..."):
+    # Botón explícito para leer el archivo y poblar el select
+    if st.sidebar.button("🔄 Cargar Nombres de Agentes"):
+        with st.spinner("Leyendo archivo de Agentes..."):
             uf, us = uploaded_sheets['exec']
+            # Procesamos solo el archivo de agentes
             df_temp = process_file_sheet(uf, us, "Agente", target_month, sel_year)
             if not df_temp.empty:
-                unique_agents = sorted(df_temp['Nombre'].unique())
-                agents_no_tica = st.sidebar.multiselect("Selecciona Agentes SIN TICA (Solo Tierra)", unique_agents)
+                unique_names = sorted(df_temp['Nombre'].unique().tolist())
+                st.session_state['agent_names_list'] = unique_names
+                st.sidebar.success(f"¡{len(unique_names)} agentes encontrados!")
+            else:
+                st.sidebar.warning("No se encontraron nombres. Revisa la hoja seleccionada.")
 
-# --- MOTOR LÓGICO V4 (CORREGIDO) ---
+    # Mostrar Multiselect si ya hay nombres cargados
+    if 'agent_names_list' in st.session_state:
+        agents_no_tica = st.sidebar.multiselect(
+            "Selecciona Agentes SIN TICA (Solo podrán ir a Tierra)", 
+            st.session_state['agent_names_list']
+        )
+else:
+    st.sidebar.info("Sube el archivo de Agentes para configurar TICA.")
+
+
+# --- MOTOR LÓGICO V5 ---
 def logic_engine(df, no_tica_list):
     rows = []
-    # Prioridad de Roles para Excel: Agente -> Supervisor -> Coordinador -> Anfitrion
     role_priority = {'Agente': 1, 'Supervisor': 2, 'Coordinador': 3, 'Anfitrion': 4}
     
     for _, r in df.iterrows():
@@ -175,45 +190,37 @@ def logic_engine(df, no_tica_list):
     
     main_counters = ["T1 AIRE", "T1 TIERRA", "T2 AIRE", "T2 TIERRA"]
     
-    # Iterar por franja horaria
+    # Iterar por franja
     for (d, h), g in df_h[df_h['Hora'] != -1].groupby(['Fecha', 'Hora']):
         
-        # Índices por rol
         agentes = g[g['Rol']=='Agente'].index.tolist()
         coords = g[g['Rol']=='Coordinador'].index.tolist()
         anfitriones = g[g['Rol']=='Anfitrion'].index.tolist()
         sups = g[g['Rol']=='Supervisor'].index.tolist()
         
         # --- 1. COLACIONES ---
-        # Función auxiliar CORREGIDA (sin role_name)
         def apply_break(indices_list, valid_start_range, break_slots):
             candidates = []
             for idx in indices_list:
                 st_h = df_h.at[idx, 'Start_H']
-                # Verificar rango de ingreso
                 if valid_start_range[0] <= st_h <= valid_start_range[1]:
                     candidates.append(idx)
             
-            # Distribuir
             for i, idx in enumerate(candidates):
                 slot_idx = i % len(break_slots)
                 if h == break_slots[slot_idx]:
                     df_h.at[idx, 'Tarea'] = 'C'
                     df_h.at[idx, 'Counter'] = 'Casino'
 
-        # Agentes Diurnos (8-10) -> Break 12-15
+        # Agentes
         apply_break(agentes, (8, 10), [13, 14]) 
-        # Agentes Nocturnos (20-22) -> Break 02-04
         apply_break(agentes, (20, 22), [2, 3])
-        
-        # Anfitriones Diurnos (8-9) -> Break 13-16
+        # Anfitriones
         apply_break(anfitriones, (8, 9), [13, 14, 15])
-        # Anfitriones Nocturnos (20-21) -> Break 02-04
         apply_break(anfitriones, (20, 21), [2, 3])
-
-        # Coordinadores (Reglas específicas Doc 1)
-        apply_break(coords, (5, 5), [12]) # Ingreso 05:00 -> Break ~12
-        apply_break(coords, (21, 21), [2]) # Ingreso 21:00 -> Break ~02
+        # Coordinadores
+        apply_break(coords, (5, 5), [12]) 
+        apply_break(coords, (21, 21), [2]) 
         
         # --- 2. FILTRAR DISPONIBLES ---
         active_agentes = [i for i in agentes if df_h.at[i, 'Tarea'] != 'C']
@@ -233,9 +240,8 @@ def logic_engine(df, no_tica_list):
                 with_tica.append(idx)
         
         counters_status = {c: False for c in main_counters}
-        spare_agentes = []
         
-        # Llenar Tierra (Prioridad para Sin TICA)
+        # A) Llenar TIERRA (Prioridad para Sin TICA)
         tierra_cnts = ["T1 TIERRA", "T2 TIERRA"]
         for t_cnt in tierra_cnts:
             if no_tica:
@@ -249,10 +255,10 @@ def logic_engine(df, no_tica_list):
                 df_h.at[idx, 'Tarea'] = '1'
                 counters_status[t_cnt] = True
         
-        # Sobrantes Sin Tica (No pueden ir a aire) -> Quedan flotando en Tierra o Refuerzo Tierra
+        # Sobrantes Sin Tica (Solo pueden ir a Refuerzo Tierra o cubrir Tierra)
         spare_no_tica = no_tica 
 
-        # Llenar Aire (Solo Con TICA)
+        # B) Llenar AIRE (Solo Con TICA)
         aire_cnts = ["T1 AIRE", "T2 AIRE"]
         for a_cnt in aire_cnts:
             if with_tica:
@@ -263,22 +269,20 @@ def logic_engine(df, no_tica_list):
         
         spare_with_tica = with_tica
         
-        # --- 4. CUBRIR QUIEBRES (Tarea 3 y 4) ---
+        # --- 4. CUBRIR QUIEBRES ---
         for cnt_name, covered in counters_status.items():
             if not covered:
                 is_tierra = "TIERRA" in cnt_name
                 is_aire = "AIRE" in cnt_name
-                
                 filled = False
                 
-                # Intento 1: Flotante
-                if is_aire and spare_with_tica: # Solo con TICA cubre Aire
+                # 4.1 Tarea 3: Flotante
+                if is_aire and spare_with_tica: 
                     idx = spare_with_tica.pop(0)
                     df_h.at[idx, 'Counter'] = cnt_name
                     df_h.at[idx, 'Tarea'] = '3'
                     filled = True
                 elif is_tierra:
-                    # Para tierra sirve cualquiera
                     if spare_no_tica:
                         idx = spare_no_tica.pop(0)
                         df_h.at[idx, 'Counter'] = cnt_name
@@ -290,20 +294,19 @@ def logic_engine(df, no_tica_list):
                         df_h.at[idx, 'Tarea'] = '3'
                         filled = True
                 
-                # Intento 2: Coordinador (Tarea 4)
+                # 4.2 Tarea 4: Coordinador
                 if not filled and active_coords:
-                    idx = active_coords[0] # Simplificado
+                    idx = active_coords[0] 
                     df_h.at[idx, 'Counter'] = cnt_name
                     df_h.at[idx, 'Tarea'] = '4'
                     active_coords.pop(0)
                     filled = True
                     
-                # Intento 3: Anfitrión (Tarea 4)
+                # 4.3 Tarea 4: Anfitrión (CORREGIDO ERROR POP)
                 if not filled and active_anfitriones:
-                    idx = active_anfitriones.pop(0)
+                    idx = active_anfitriones.pop(0) # <-- UN SOLO POP
                     df_h.at[idx, 'Counter'] = cnt_name
                     df_h.at[idx, 'Tarea'] = '4'
-                    active_anfitriones.pop(0) # Ya usado
                     filled = True
                 
         # --- 5. ASIGNAR RESTANTES ---
@@ -317,25 +320,21 @@ def logic_engine(df, no_tica_list):
             df_h.at[idx, 'Tarea'] = '1'
             df_h.at[idx, 'Counter'] = "T1 AIRE" if i%2==0 else "T2 AIRE" 
             
-        # Coordinadores (Tareas Admin)
+        # Coordinadores
         for idx in active_coords:
             st_h = df_h.at[idx, 'Start_H']
             task = '1'
             cnt = 'Piso'
-            
-            # Reglas Tarea 2
             if st_h == 10 and (h == 10 or h in [14, 15]):
                 task = '2'; cnt = 'Oficina'
             elif st_h == 5 and (h in [6, 7]):
                 task = '2'; cnt = 'Oficina'
             elif st_h == 21 and (h in [5, 6]):
                 task = '2'; cnt = 'Oficina'
-                
             df_h.at[idx, 'Tarea'] = task
             df_h.at[idx, 'Counter'] = cnt
             
         # Anfitriones
-        # Mínimo 2 por franja.
         for i, idx in enumerate(active_anfitriones):
             df_h.at[idx, 'Tarea'] = '1'
             df_h.at[idx, 'Counter'] = 'Zona Int' if i%2==0 else 'Zona Nac'
@@ -351,15 +350,13 @@ def logic_engine(df, no_tica_list):
 def make_excel(df):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V4")
+    ws = wb.add_worksheet("Sábana V5")
     
-    # Formatos
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
     f_base = wb.add_format({'border': 1, 'align': 'center', 'font_size': 9})
     f_group = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#BFBFBF', 'align': 'left'})
     
-    # Estilos Tareas
     st_map = {
         '2': wb.add_format({'bg_color': '#FFF2CC', 'border': 1, 'align': 'center'}),
         '3': wb.add_format({'bg_color': '#BDD7EE', 'border': 1, 'align': 'center'}),
@@ -385,19 +382,15 @@ def make_excel(df):
         d_map[d] = col
         col += 26
         
-    # Ordenar
     df_sorted = df[['Nombre', 'Rol', 'Role_Rank']].drop_duplicates().sort_values(['Role_Rank', 'Nombre'])
     
     row = 2
     curr_role = ""
-    
     df_idx = df.set_index(['Nombre', 'Fecha', 'Hora'])
     df_base = df.drop_duplicates(['Nombre', 'Fecha']).set_index(['Nombre', 'Fecha'])
     
     for _, p in df_sorted.iterrows():
         n, r = p['Nombre'], p['Rol']
-        
-        # Separador de Grupo
         if r != curr_role:
             ws.merge_range(row, 0, row, col-1, f"--- {r.upper()} ---", f_group)
             row += 1
@@ -409,7 +402,6 @@ def make_excel(df):
         for d in dates:
             if d not in d_map: continue
             c = d_map[d]
-            
             try:
                 t_raw = df_base.loc[(n, d), 'Turno_Raw']
                 ws.write(row, c, str(t_raw), f_base)
@@ -433,7 +425,7 @@ def make_excel(df):
     return out
 
 # --- EJECUCIÓN ---
-if st.button("🚀 Generar Planificación V4"):
+if st.button("🚀 Generar Planificación V5"):
     if not uploaded_sheets:
         st.error("Sube los archivos primero.")
     else:
@@ -447,4 +439,4 @@ if st.button("🚀 Generar Planificación V4"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V4_{sel_month_name}.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V5_{sel_month_name}.xlsx")
