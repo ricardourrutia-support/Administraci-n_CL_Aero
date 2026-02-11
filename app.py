@@ -8,15 +8,15 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V23 (Fix Cobertura Anfitriones)")
+st.title("✈️ Gestor de Turnos: V24 (Zona Base Anfitriones)")
 st.markdown("""
-**Corrección V23:**
-* Solucionado el error que revertía los movimientos de anfitriones.
-* Ahora la **Tarea 3** (Cobertura entre Zona Int/Nac) se aplica y persiste correctamente.
-* Se mantiene la cascada de rescate (Coord -> Agente -> HHEE).
+**Mejoras V24:**
+1. **Zona Base Fija:** Los anfitriones tienen una zona asignada para todo el día (Int o Nac).
+2. **Tarea 3 Visible:** Si un anfitrión debe cambiar de zona para cubrir un hueco, aparecerá explícitamente como "3: Cubrir...".
+3. **Rescate:** Coordinadores y Agentes siguen apoyando si faltan anfitriones.
 """)
 
-# --- PARSEO ---
+# --- PARSEO ROBUSTO ---
 def parse_shift_time(shift_str):
     if pd.isna(shift_str): return [], None
     s = str(shift_str).lower().strip()
@@ -28,6 +28,7 @@ def parse_shift_time(shift_str):
     
     start_h = -1
     end_h = -1
+    
     if match:
         try:
             start_h = int(match.group(1))
@@ -79,6 +80,7 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
                     d_num = int(float(col))
                     col_date = datetime(start_date.year, start_date.month, d_num)
                 except: pass
+            
             if col_date:
                 c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
                 if start_date <= c_dt <= end_date:
@@ -137,7 +139,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V23 ---
+# --- MOTOR LÓGICO V24 ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -186,19 +188,28 @@ def logic_engine(df, no_tica_list):
     df_h = pd.DataFrame(rows)
     if df_h.empty: return df_h
     
-    # 3. COUNTERS DIARIOS
+    # 3. COUNTERS DIARIOS (ASIGNACIÓN BASE)
     main_counters_aire = ["T1 AIRE", "T2 AIRE"]
     main_counters_tierra = ["T1 TIERRA", "T2 TIERRA"]
-    daily_assignments = {} 
+    daily_assignments = {} # (Nombre, Fecha) -> Counter Base (Agentes)
+    anf_base_assignments = {} # (Nombre, Fecha) -> Zona Base (Anfitriones)
     
     for d in df_h['Fecha'].unique():
-        active = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Agente') & (df_h['Hora'] != -1)]['Nombre'].unique()
-        load = {c: 0 for c in main_counters_aire + main_counters_tierra}
-        for ag_name in active:
+        # A) Agentes
+        active_ag = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Agente') & (df_h['Hora'] != -1)]['Nombre'].unique()
+        load_ag = {c: 0 for c in main_counters_aire + main_counters_tierra}
+        for ag_name in active_ag:
             has_tica = ag_name not in no_tica_list
-            chosen = sorted(main_counters_tierra if not has_tica else main_counters_aire + main_counters_tierra, key=lambda c: load[c])[0]
-            load[chosen] += 1
+            chosen = sorted(main_counters_tierra if not has_tica else main_counters_aire + main_counters_tierra, key=lambda c: load_ag[c])[0]
+            load_ag[chosen] += 1
             daily_assignments[(ag_name, d)] = chosen
+            
+        # B) Anfitriones (Nuevo V24: Asignación Fija Diaria)
+        active_anf = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Anfitrion') & (df_h['Hora'] != -1)]['Nombre'].unique()
+        # Balanceo simple: Uno a Int, Uno a Nac
+        for i, anf_name in enumerate(active_anf):
+            zone = 'Zona Int' if i % 2 == 0 else 'Zona Nac'
+            anf_base_assignments[(anf_name, d)] = zone
 
     # 4. PRE-PROCESO COORDINADORES
     coords_active = df_h[(df_h['Rol'] == 'Coordinador') & (df_h['Hora'] != -1)]
@@ -235,9 +246,14 @@ def logic_engine(df, no_tica_list):
         idx_an = g[g['Rol']=='Anfitrion'].index.tolist()
         idx_su = g[g['Rol']=='Supervisor'].index.tolist()
         
-        # A. Asignaciones Base
+        # A. Asignaciones Base (Agentes y Anfitriones)
         for idx in idx_ag:
             base = daily_assignments.get((df_h.at[idx, 'Nombre'], d), "General")
+            df_h.at[idx, 'Counter'] = base
+            df_h.at[idx, 'Tarea'] = '1'
+            
+        for idx in idx_an:
+            base = anf_base_assignments.get((df_h.at[idx, 'Nombre'], d), "General")
             df_h.at[idx, 'Counter'] = base
             df_h.at[idx, 'Tarea'] = '1'
 
@@ -310,39 +326,45 @@ def logic_engine(df, no_tica_list):
             if not covered:
                 hhee_counters.append({'Fecha': d, 'Hora': h, 'Counter': target_cnt})
 
-        # D. Cobertura Anfitriones (V23 Correcta)
-        # Asignar base (1 Int, 1 Nac...)
-        active_anf = [i for i in idx_an if df_h.at[i, 'Tarea'] == '1']
-        anf_zones = {'Zona Int': 0, 'Zona Nac': 0}
-        anf_assign = {}
+        # D. Cobertura Anfitriones (V24: Usando Base Fija)
         
-        for i, idx in enumerate(active_anf):
-            zone = 'Zona Int' if i % 2 == 0 else 'Zona Nac'
-            df_h.at[idx, 'Counter'] = zone
-            anf_zones[zone] += 1
-            anf_assign[idx] = zone
-            
-        missing_zones = [z for z, count in anf_zones.items() if count == 0]
+        # Contar estado actual basado en Tarea 1
+        current_anf_status = {'Zona Int': 0, 'Zona Nac': 0}
+        active_anf_list = [] # Solo los que están en Tarea 1
+        
+        for idx in idx_an:
+            if df_h.at[idx, 'Tarea'] == '1':
+                z = df_h.at[idx, 'Counter']
+                current_anf_status[z] += 1
+                active_anf_list.append(idx)
+                
+        # Detectar Huecos (Zonas con 0)
+        missing_zones = [z for z, count in current_anf_status.items() if count == 0]
         
         for zone in missing_zones:
             filled = False
-            # 1. Tarea 3
-            other = 'Zona Nac' if zone == 'Zona Int' else 'Zona Int'
-            if anf_zones.get(other, 0) > 1:
-                cand = [i for i in active_anf if anf_assign[i] == other][0]
-                df_h.at[cand, 'Tarea'] = f"3: Cubrir {zone}"
-                df_h.at[cand, 'Counter'] = zone
-                anf_zones[other] -= 1
-                anf_zones[zone] += 1
-                filled = True
             
-            # 2. Coordinador
+            # 1. Tarea 3: Mover Anfitrión de la otra zona (si sobran)
+            other = 'Zona Nac' if zone == 'Zona Int' else 'Zona Int'
+            if current_anf_status.get(other, 0) > 1:
+                # Buscar candidato en la otra zona
+                cands = [i for i in active_anf_list if df_h.at[i, 'Counter'] == other]
+                if cands:
+                    cand = cands[0]
+                    df_h.at[cand, 'Tarea'] = f"3: Cubrir {zone}"
+                    df_h.at[cand, 'Counter'] = zone # Visualmente se mueve
+                    current_anf_status[other] -= 1
+                    current_anf_status[zone] += 1
+                    filled = True
+            
+            # 2. Tarea 4: Coordinador
             if not filled:
                 avail_c = [i for i in idx_co if df_h.at[i, 'Tarea'] != 'C']
                 cand = None
+                t1_rem = len([i for i in avail_c if df_h.at[i, 'Tarea'] == '1'])
                 t2_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '2']
                 t1_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '1']
-                t1_rem = len(t1_c)
+                
                 if t2_c: cand = t2_c[0]
                 elif t1_c and t1_rem > 1: cand = t1_c[0]
                 
@@ -351,7 +373,7 @@ def logic_engine(df, no_tica_list):
                     df_h.at[cand, 'Counter'] = zone
                     filled = True
             
-            # 3. Agente
+            # 3. Tarea 4: Agente
             if not filled:
                 for d_idx in donors:
                     orig = daily_assignments.get((df_h.at[d_idx, 'Nombre'], d))
@@ -374,7 +396,6 @@ def logic_engine(df, no_tica_list):
             if df_h.at[idx, 'Tarea'] == '1': df_h.at[idx, 'Counter'] = 'General'
         for idx in idx_su:
             df_h.at[idx, 'Counter'] = 'General'; df_h.at[idx, 'Tarea'] = '1'
-        # Anfitriones NO se reasignan aquí, se respetan los cambios de D.
 
     # --- HHEE ---
     unique_dates = sorted(df_h['Fecha'].unique())
@@ -411,7 +432,7 @@ def logic_engine(df, no_tica_list):
 def make_excel(df):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V23")
+    ws = wb.add_worksheet("Sábana V24")
     
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
@@ -467,7 +488,6 @@ def make_excel(df):
         for d in dates:
             if d not in d_map: continue
             c = d_map[d]
-            
             subset = df[(df['Nombre']==n) & (df['Fecha']==d)]
             if subset.empty:
                  ws.write(row, c, "-", f_libre)
@@ -479,6 +499,7 @@ def make_excel(df):
             if r == "HHEE": t_raw = "Demanda"
             ws.write(row, c, str(t_raw), f_base)
             
+            # Place
             active = subset[subset['Hora'] != -1]
             if active.empty and r != "HHEE":
                 ws.write(row, c+1, "Libre", f_libre)
@@ -488,6 +509,7 @@ def make_excel(df):
                     else: ws.write(row, c+1, active['Counter'].mode()[0], f_base)
                 except: ws.write(row, c+1, "?", f_base)
             
+            # Hours
             for h in range(24):
                 try:
                     val = df_idx.loc[(n, d, h)]
@@ -505,7 +527,7 @@ def make_excel(df):
     wb.close()
     return out
 
-if st.button("🚀 Generar Planificación V23"):
+if st.button("🚀 Generar Planificación V24"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -520,4 +542,4 @@ if st.button("🚀 Generar Planificación V23"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V23.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V24.xlsx")
