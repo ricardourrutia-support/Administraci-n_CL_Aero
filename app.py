@@ -8,23 +8,35 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V17 (Corrección Cruce Nocturno)")
+st.title("✈️ Gestor de Turnos: V18 (Parser HH:MM:SS)")
 st.markdown("""
-**Corrección Crítica V17:**
-* **Turnos Nocturnos:** Ahora las horas de madrugada (00:00 en adelante) se asignan correctamente al **día siguiente**.
-* **Continuidad:** Se acabaron los cortes en turnos de Anfitriones y Agentes PM.
-* **HHEE:** Alertas de cobertura mantenidas.
+**Corrección V18:**
+* **Lectura de Horas:** Se solucionó el problema con formatos `10:00:00`. Ahora se leen correctamente.
+* **Clasificación:** Al leer bien las horas, desaparece el grupo "General" y se asignan a Diurno/Nocturno.
+* **Reglas:** Se mantienen todas las reglas de HHEE y Cobertura de la V17.
 """)
 
-# --- PARSEO ROBUSTO ---
+# --- PARSEO ROBUSTO V18 ---
 def parse_shift_time(shift_str):
+    """
+    Parser V18: Capaz de leer formatos complejos como '10:00:00 - 21:00:00'.
+    Ignora minutos y segundos, concentrándose en las horas de bloque.
+    """
     if pd.isna(shift_str): return [], None
     s = str(shift_str).lower().strip()
+    
+    # Filtros de inactividad
     if s == "" or any(x in s for x in ['libre', 'nan', 'l', 'x', 'vacaciones', 'licencia', 'falla', 'domingos libres', 'festivo', 'feriado']):
         return [], None
     
-    s = s.replace(" diurno", "").replace(" nocturno", "").replace("hrs", "").replace("horas", "").replace("de", "").replace("a", "-").replace(":", ".")
-    match = re.search(r'(\d{1,2})(?:\.(\d{2}))?\s*(?:-|a|–|to)\s*(\d{1,2})(?:\.(\d{2}))?', s)
+    # Normalización de separadores
+    s = s.replace(" diurno", "").replace(" nocturno", "").replace("hrs", "").replace("horas", "").replace("de", "").replace("a", "-").replace("–", "-").replace("to", "-")
+    
+    # REGEX MEJORADA:
+    # (\d{1,2})       -> Captura la hora (1 o 2 dígitos)
+    # (?:[:.]\d+)* -> Consume pasivamente cualquier cosa como :00, :30:00, .00 (minutos/segundos)
+    # \s*-\s* -> Separador
+    match = re.search(r'(\d{1,2})(?:[:.]\d+)*\s*-\s*(\d{1,2})(?:[:.]\d+)*', s)
     
     start_h = -1
     end_h = -1
@@ -32,15 +44,16 @@ def parse_shift_time(shift_str):
     if match:
         try:
             start_h = int(match.group(1))
-            end_h = int(match.group(3))
+            end_h = int(match.group(2))
             
+            # Validación de rango
             if 0 <= start_h <= 24 and 0 <= end_h <= 24:
                 if start_h < end_h:
                     return list(range(start_h, end_h)), start_h
-                elif start_h > end_h: # Noche
+                elif start_h > end_h: # Turno noche (cruce)
                     return list(range(start_h, 24)) + list(range(0, end_h)), start_h
                 else:
-                    return [], None
+                    return [], None # Inicio == Fin (raro, asumimos vacío)
         except: pass
         
     return [], None
@@ -88,8 +101,6 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
             
             if col_date:
                 c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
-                # Cargamos un poco más de margen para corregir turnos que vienen del mes anterior si fuera necesario
-                # Pero por ahora filtramos estricto
                 if start_date <= c_dt <= end_date:
                     date_map[col] = col_date
 
@@ -98,7 +109,7 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
             if pd.isna(name_val): continue
             s_name = str(name_val).strip()
             if s_name == "" or len(s_name) < 3: continue
-            if any(k in s_name.lower() for k in ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas"]): continue
+            if any(k in s_name.lower() for k in ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas", "resumen"]): continue
             if s_name.replace('.', '', 1).isdigit(): continue
 
             clean_name = s_name.title()
@@ -146,7 +157,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V17 (CORRECCIÓN CRUCE DE DÍA) ---
+# --- MOTOR LÓGICO ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -163,7 +174,7 @@ def logic_engine(df, no_tica_list):
                 else: pm += 1
         agent_class[name] = "Nocturno" if pm > am else "Diurno"
 
-    # 2. EXPANDIR CON LÓGICA DE DÍA SIGUIENTE
+    # 2. EXPANDIR
     for _, r in df.iterrows():
         hours, start_h = parse_shift_time(r['Turno_Raw'])
         sub_group = "General"
@@ -181,23 +192,15 @@ def logic_engine(df, no_tica_list):
             rows.append({**r, 'Hora': -1, 'Tarea': str(r['Turno_Raw']), 'Counter': '-', 
                          'Role_Rank': role_rank, 'Sub_Group': sub_group, 'Start_H': -1})
         else:
-            # Detectar si hay cruce de día
-            # Si la lista de horas tiene un "salto" (ej: ..., 23, 0, ...)
-            # O simplemente iteramos: si hora < start_h, es dia siguiente (asumiendo turno < 24h)
-            
             for h in hours:
-                # Calcular fecha real de la hora
+                # Cruce de día V17
                 current_date = r['Fecha']
-                
-                # Si es un turno nocturno (empieza >= 20 o <= 5 y cruza)
-                # Lógica simple: Si hora < start_h (ej: hora 2 < inicio 21), es mañana
                 if start_h >= 18 and h < 12: 
                     current_date = current_date + timedelta(days=1)
                 
                 rows.append({
                     'Nombre': r['Nombre'], 'Rol': r['Rol'], 'Turno_Raw': r['Turno_Raw'],
-                    'Fecha': current_date, # FECHA CORREGIDA
-                    'Hora': h, 'Tarea': '1', 'Counter': '?', 
+                    'Fecha': current_date, 'Hora': h, 'Tarea': '1', 'Counter': '?', 
                     'Role_Rank': role_rank, 'Sub_Group': sub_group, 'Start_H': start_h
                 })
     
@@ -209,7 +212,6 @@ def logic_engine(df, no_tica_list):
     main_counters_tierra = ["T1 TIERRA", "T2 TIERRA"]
     daily_assignments = {} 
     
-    # Asignar counter basado en la fecha real de trabajo
     for d in df_h['Fecha'].unique():
         active = df_h[(df_h['Fecha'] == d) & (df_h['Rol'] == 'Agente') & (df_h['Hora'] != -1)]['Nombre'].unique()
         load = {c: 0 for c in main_counters_aire + main_counters_tierra}
@@ -219,7 +221,7 @@ def logic_engine(df, no_tica_list):
             load[chosen] += 1
             daily_assignments[(ag_name, d)] = chosen
 
-    # 4. PRE-PROCESO COORDINADORES
+    # 4. PRE-PROCESO COORDINADORES (OFF)
     coords_active = df_h[(df_h['Rol'] == 'Coordinador') & (df_h['Hora'] != -1)]
     for idx, row in coords_active.iterrows():
         st_h = row['Start_H']
@@ -230,8 +232,10 @@ def logic_engine(df, no_tica_list):
         if st_h == 10:
             if h == 10: df_h.at[idx, 'Tarea'] = '2'; df_h.at[idx, 'Counter'] = 'Oficina'
             elif h in [14, 15]:
-                if (h == 14 and is_odd) or (h == 15 and not is_odd): df_h.at[idx, 'Tarea'] = 'C'; df_h.at[idx, 'Counter'] = 'Casino'
-                else: df_h.at[idx, 'Tarea'] = '2'; df_h.at[idx, 'Counter'] = 'Oficina'
+                if (h == 14 and is_odd) or (h == 15 and not is_odd):
+                    df_h.at[idx, 'Tarea'] = 'C'; df_h.at[idx, 'Counter'] = 'Casino'
+                else:
+                    df_h.at[idx, 'Tarea'] = '2'; df_h.at[idx, 'Counter'] = 'Oficina'
         elif st_h == 5:
             if h in [11, 12, 13]:
                 if h == 12: df_h.at[idx, 'Tarea'] = 'C'; df_h.at[idx, 'Counter'] = 'Casino'
@@ -286,6 +290,7 @@ def logic_engine(df, no_tica_list):
         # C. Cobertura
         for target_cnt in empty:
             covered = False
+            
             # 1. Agente
             possible = []
             for d_idx in donors:
@@ -318,7 +323,7 @@ def logic_engine(df, no_tica_list):
                     df_h.at[cand, 'Counter'] = target_cnt
                     covered = True
             
-            # 3. Anfitrión (Min 2 en Losa)
+            # 3. Anfitrión
             if not covered and idx_an:
                 avail_a = [i for i in idx_an if df_h.at[i, 'Tarea'] != 'C']
                 if len(avail_a) > 2:
@@ -379,7 +384,7 @@ def logic_engine(df, no_tica_list):
 def make_excel(df):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V17")
+    ws = wb.add_worksheet("Sábana V18")
     
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
@@ -462,21 +467,19 @@ def make_excel(df):
                     val = df_idx.loc[(n, d, h)]
                     if isinstance(val, pd.DataFrame): val = val.iloc[0]
                     task = str(val['Tarea'])
-                    
                     style = f_base
                     if task.startswith('3'): style = st_map['3']
                     elif task.startswith('4'): style = st_map['4']
                     elif task == 'C': style = st_map['C']
                     elif task == '2': style = st_map['2']
                     elif task == 'HHEE': style = st_map['HHEE']
-                    
                     ws.write(row, c+2+h, task, style)
                 except: ws.write(row, c+2+h, "", f_libre)
         row += 1
     wb.close()
     return out
 
-if st.button("🚀 Generar Planificación V17"):
+if st.button("🚀 Generar Planificación V18"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -491,4 +494,4 @@ if st.button("🚀 Generar Planificación V17"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V17.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V18.xlsx")
