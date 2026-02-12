@@ -8,12 +8,12 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V32 (Normalización Final)")
+st.title("✈️ Gestor de Turnos: V33 (Normalización Anfitriones + Histórico)")
 st.markdown("""
-**Mejoras V32:**
-1. **Limpieza de Tareas:** Si un agente cubre un puesto la mayor parte del día, se convierte en su puesto oficial (Tarea 1) y no "Cobertura".
-2. **Lugar Real:** La columna 'Lugar' refleja dónde trabajó efectivamente el colaborador.
-3. **Tarea 3:** Reservada exclusivamente para movimientos temporales (colaciones/apoyos breves).
+**Actualización V33:**
+1. **Anfitriones:** Normalizados a Tarea 1 (Base) y Tarea 3 (Cobertura).
+2. **Turnos Nocturnos:** Se carga el día anterior al inicio para capturar las madrugadas (ej: 31 Ene -> 1 Feb).
+3. **Supervisores:** Asegurados en la visualización.
 """)
 
 # --- PARSEO ---
@@ -63,7 +63,11 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
             if isinstance(col, str) and ("nombre" in col.lower() or "cargo" in col.lower() or "supervisor" in col.lower()):
                 name_col = col
                 break
+        
         date_map = {}
+        # V33: Cargar desde un día antes para capturar noche previa
+        load_start = start_date - timedelta(days=1)
+        
         for col in df.columns:
             col_date = None
             if header_type == 'date':
@@ -74,11 +78,18 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
             elif header_type == 'number':
                 try: 
                     d_num = int(float(col))
+                    # Asumimos mes/año de start_date, cuidado con cambio de mes/año
+                    # Lógica simple para números de día
                     col_date = datetime(start_date.year, start_date.month, d_num)
+                    # Ajuste si d_num es del mes anterior (simple heuristic)
+                    if d_num > 20 and start_date.day < 5:
+                         col_date = col_date - timedelta(days=30) # Aprox
                 except: pass
+            
             if col_date:
                 c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
-                if start_date <= c_dt <= end_date:
+                # Rango ampliado
+                if load_start <= c_dt <= end_date:
                     date_map[col] = col_date
 
         for idx, row in df.iterrows():
@@ -115,6 +126,7 @@ for label, key in files_info:
     if f and start_d:
         try:
             xl = pd.ExcelFile(f)
+            # Intentar adivinar hoja
             m_names = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
             curr = m_names[start_d.month]
             def_ix = next((i for i, s in enumerate(xl.sheet_names) if curr.lower() in s.lower()), 0)
@@ -134,7 +146,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V32 ---
+# --- MOTOR LÓGICO V33 ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -291,6 +303,9 @@ def logic_engine(df, no_tica_list):
         for idx in idx_an:
             df_h.at[idx, 'Counter'] = anf_base_assignments.get((df_h.at[idx, 'Nombre'], d), "General")
             df_h.at[idx, 'Tarea'] = '1'
+        for idx in idx_su:
+            df_h.at[idx, 'Counter'] = "General"
+            df_h.at[idx, 'Tarea'] = '1'
 
         def apply_break(indices, start_range, slots):
             cands = [i for i in indices if start_range[0] <= df_h.at[i, 'Start_H'] <= start_range[1]]
@@ -358,7 +373,7 @@ def logic_engine(df, no_tica_list):
             if not covered:
                 hhee_counters.append({'Fecha': d, 'Hora': h, 'Counter': target_cnt})
 
-        # D. Cobertura Anfitriones
+        # D. Cobertura Anfitriones (Normalizada V33)
         anf_avail = []
         for idx in idx_an:
             t = df_h.at[idx, 'Tarea']
@@ -369,7 +384,8 @@ def logic_engine(df, no_tica_list):
             z = df_h.at[idx, 'Counter']
             if z not in zones_assigned: z = 'Int'
             zones_assigned[z].append(idx)
-            df_h.at[idx, 'Tarea'] = z 
+            # V33: NO CAMBIAR TAREA A 'Nac'/'Int', dejar '1'
+            df_h.at[idx, 'Tarea'] = '1' 
             
         missing_nac = len(zones_assigned['Nac']) == 0
         missing_int = len(zones_assigned['Int']) == 0
@@ -380,7 +396,7 @@ def logic_engine(df, no_tica_list):
             other = 'Int' if target_zone_name == 'Nac' else 'Nac'
             if len(zones_assigned[other]) > 1:
                 cand = zones_assigned[other][0]
-                df_h.at[cand, 'Tarea'] = target_zone_name
+                df_h.at[cand, 'Tarea'] = f"3: Cubrir {target_zone_name}"
                 df_h.at[cand, 'Counter'] = f"Zona {target_zone_name}"
                 filled = True
             if not filled:
@@ -414,35 +430,30 @@ def logic_engine(df, no_tica_list):
         for idx in idx_su:
             df_h.at[idx, 'Counter'] = 'General'; df_h.at[idx, 'Tarea'] = '1'
 
-    # --- FASE V32: NORMALIZACIÓN Y CÁLCULO FINAL DE BASE ---
-    # Recorrer todos los agentes y días para definir su Base_Diaria real
-    # según donde trabajaron más horas.
+    # --- FASE NORMALIZACIÓN (ANF Y AGENTES) ---
+    final_bases = {} 
     
-    final_bases = {} # (Nombre, Fecha) -> Base Calculada
-    
-    # Agrupar por Nombre y Fecha
     grouped = df_h[df_h['Hora'] != -1].groupby(['Nombre', 'Fecha'])
-    
     for (name, date), group in grouped:
-        # Contar frecuencia de counters (excluyendo Casino y Oficina si se quiere, o incluyendolos)
-        # Nos interesa el lugar físico de trabajo
         valid_counts = group[~group['Counter'].isin(['Casino', 'Oficina', 'General'])]['Counter'].value_counts()
-        
-        if not valid_counts.empty:
-            real_base = valid_counts.index[0] # El más frecuente
-        else:
-            # Si solo estuvo en Oficina o Casino (raro), o General
-            real_base = group['Counter'].mode()[0]
-            
+        if not valid_counts.empty: real_base = valid_counts.index[0] 
+        else: real_base = group['Counter'].mode()[0]
         final_bases[(name, date)] = real_base
         
-        # Limpieza de Tareas: Si tarea es "3: Cubrir X" y X == real_base, cambiar a "1"
+        # Limpieza de Tareas "Cubrir" redundantes
         for idx in group.index:
             task = str(df_h.at[idx, 'Tarea'])
+            cnt = str(df_h.at[idx, 'Counter'])
+            
+            # Agentes: si cubre su misma base
             if "Cubrir" in task and real_base in task:
                 df_h.at[idx, 'Tarea'] = '1'
-                
-    # Actualizar la columna Base_Diaria en el DF para el Excel
+            # Anfitriones V33: Tarea 3 si está en zona opuesta a su base
+            if group.iloc[0]['Rol'] == 'Anfitrion':
+                # Si es Tarea 3 pero está en su zona base asignada, revertir
+                if "Cubrir" in task and cnt == real_base:
+                     df_h.at[idx, 'Tarea'] = '1'
+
     for idx, row in df_h.iterrows():
         if row['Hora'] != -1:
             df_h.at[idx, 'Base_Diaria'] = final_bases.get((row['Nombre'], row['Fecha']), "-")
@@ -478,10 +489,10 @@ def logic_engine(df, no_tica_list):
     return df_h
 
 # --- EXCEL ---
-def make_excel(df):
+def make_excel(df, start_d, end_d):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V32")
+    ws = wb.add_worksheet("Sábana V33")
     
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
@@ -489,17 +500,12 @@ def make_excel(df):
     f_libre = wb.add_format({'border': 1, 'align': 'center', 'font_size': 9, 'bg_color': '#F2F2F2', 'font_color': '#808080'})
     f_group = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#BFBFBF', 'align': 'left', 'indent': 1})
     
-    f_nac = wb.add_format({'bg_color': '#FCE4D6', 'border': 1, 'align': 'center'})
-    f_int = wb.add_format({'bg_color': '#DDEBF7', 'border': 1, 'align': 'center'})
-    
     st_map = {
         '2': wb.add_format({'bg_color': '#FFF2CC', 'border': 1, 'align': 'center'}),
         '3': wb.add_format({'bg_color': '#BDD7EE', 'border': 1, 'align': 'center', 'font_size': 8, 'text_wrap': True}),
         '4': wb.add_format({'bg_color': '#F8CBAD', 'border': 1, 'align': 'center', 'bold': True, 'font_size': 8, 'text_wrap': True}),
         'C': wb.add_format({'bg_color': '#C6E0B4', 'border': 1, 'align': 'center'}),
         'HHEE': wb.add_format({'bg_color': '#7030A0', 'font_color': 'white', 'bold': True, 'border': 1, 'align': 'center'}),
-        'Nac': f_nac,
-        'Int': f_int,
         '1': f_base
     }
 
@@ -507,7 +513,10 @@ def make_excel(df):
     ws.write(1, 1, "Rol", f_head)
     ws.freeze_panes(2, 2)
     
-    dates = sorted(df['Fecha'].unique())
+    # Filtrar fechas para Excel (V33: Solo las solicitadas)
+    all_dates = sorted(df['Fecha'].unique())
+    dates = [d for d in all_dates if start_d <= d.date() <= end_d]
+    
     col = 2
     d_map = {}
     for d in dates:
@@ -543,6 +552,12 @@ def make_excel(df):
             if d not in d_map: continue
             c = d_map[d]
             subset = df[(df['Nombre']==n) & (df['Fecha']==d)]
+            
+            # Caso especial: Turno arrastrado desde ayer pero sin turno HOY
+            # Si subset está vacío, verificar si tiene horas asignadas (cruce)
+            # En la estructura actual, las filas de cruce tienen fecha 'd', así que subset no debería estar vacío si hay horas.
+            # Pero si no hay horas en este día (solo viene de ayer y termina a las 08:00), Turno_Raw puede ser Libre en este día.
+            
             if subset.empty:
                  ws.write(row, c, "-", f_libre)
                  ws.write(row, c+1, "Libre", f_libre)
@@ -553,7 +568,6 @@ def make_excel(df):
             if r == "HHEE": t_raw = "Demanda"
             ws.write(row, c, str(t_raw), f_base)
             
-            # LUGAR: Usar Base Diaria CALCULADA
             active = subset[subset['Hora'] != -1]
             if active.empty and r != "HHEE":
                 ws.write(row, c+1, "Libre", f_libre)
@@ -581,7 +595,7 @@ def make_excel(df):
     wb.close()
     return out
 
-if st.button("🚀 Generar Planificación V32"):
+if st.button("🚀 Generar Planificación V33"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -596,4 +610,4 @@ if st.button("🚀 Generar Planificación V32"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final), f"Planificacion_V32.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final, start_d, end_d), f"Planificacion_V33.xlsx")
