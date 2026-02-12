@@ -7,20 +7,19 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V44)", layout="wide")
-st.title("✈️ Gestor de Turnos: V44 (Fix Excel Styles)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V45)", layout="wide")
+st.title("✈️ Gestor de Turnos: V45 (Visualización Garantizada)")
 st.markdown("""
-**Instrucciones V44:**
-* **Bitácora:** Use las listas desplegables. Si selecciona "Inasistencia", el sistema asume todo el día.
-* **Plan Operativo:** Se actualiza en tiempo real al ingresar datos en la Bitácora.
-* **Corrección Técnica:** Solucionado el error de generación del Excel (Definición de estilos).
+**Mejoras V45:**
+1. **Visualización Completa:** Se corrigió el error que ocultaba turnos en la hoja operativa.
+2. **Inasistencias:** Al seleccionar "Inasistencia" en la bitácora, el sistema marca automáticamente todo el día como FALTA.
+3. **Resúmenes:** Se mantienen los reportes de horas y HHEE que funcionan correctamente.
 """)
 
 # --- INICIALIZACIÓN ---
 if 'incidencias' not in st.session_state:
     st.session_state.incidencias = []
 
-# Variables globales críticas
 today = datetime.now()
 uploaded_sheets = {}
 start_d = None
@@ -75,43 +74,52 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
                 name_col = col
                 break
         date_map = {}
-        # Carga ampliada
-        if start_date:
-            load_start = start_date - timedelta(days=1)
-            for col in df.columns:
-                col_date = None
-                if header_type == 'date':
-                    if isinstance(col, (datetime, pd.Timestamp)): col_date = col
-                    elif isinstance(col, str):
-                        try: col_date = pd.to_datetime(col)
-                        except: pass
-                elif header_type == 'number':
-                    try: 
-                        d_num = int(float(col))
-                        col_date = datetime(start_date.year, start_date.month, d_num)
-                        if d_num > 20 and start_date.day < 5:
-                             col_date = col_date - timedelta(days=30)
-                    except: pass
-                if col_date:
-                    c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
-                    if load_start <= c_dt <= end_date:
-                        date_map[col] = col_date
+        # Carga ampliada para turnos noche
+        load_start = start_date - timedelta(days=1)
+        
+        # Estrategia fecha: Priorizar objeto fecha, fallback a numero con mes/año de start_date
+        for col in df.columns:
+            col_date = None
+            if isinstance(col, (datetime, pd.Timestamp)):
+                col_date = col
+            elif isinstance(col, str):
+                try: col_date = pd.to_datetime(col)
+                except: pass
+            
+            # Fallback numerico (días 1..31)
+            if col_date is None and isinstance(col, (int, float)):
+                try:
+                    d_num = int(float(col))
+                    # Determinar mes correcto (start_date o mes previo)
+                    # Si start_date es 1-Feb, y vemos 31, es Enero. Si vemos 2, es Feb.
+                    # Simple: Construir fecha con mes de start_date
+                    cand_date = datetime(start_date.year, start_date.month, d_num)
+                    # Si d_num es grande (ej 30) y start_date es chico (ej 2), probablemente mes anterior
+                    if d_num > 20 and start_date.day < 5:
+                        cand_date = cand_date - timedelta(days=30) # Aprox mes anterior
+                    col_date = cand_date
+                except: pass
 
-            for idx, row in df.iterrows():
-                name_val = row[name_col]
-                if pd.isna(name_val): continue
-                s_name = str(name_val).strip()
-                if s_name == "" or len(s_name) < 3: continue
-                if any(k in s_name.lower() for k in ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas"]): continue
-                if s_name.replace('.', '', 1).isdigit(): continue
+            if col_date:
+                c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
+                if load_start <= c_dt <= end_date:
+                    date_map[col] = col_date
 
-                clean_name = s_name.title()
-                for col_name, date_obj in date_map.items():
-                    shift_val = row[col_name]
-                    if pd.isna(shift_val): shift_val = "Libre"
-                    extracted_data.append({
-                        'Nombre': clean_name, 'Rol': role, 'Fecha': date_obj, 'Turno_Raw': shift_val
-                    })
+        for idx, row in df.iterrows():
+            name_val = row[name_col]
+            if pd.isna(name_val): continue
+            s_name = str(name_val).strip()
+            if s_name == "" or len(s_name) < 3: continue
+            if any(k in s_name.lower() for k in ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas"]): continue
+            if s_name.replace('.', '', 1).isdigit(): continue
+
+            clean_name = s_name.title()
+            for col_name, date_obj in date_map.items():
+                shift_val = row[col_name]
+                if pd.isna(shift_val): shift_val = "Libre"
+                extracted_data.append({
+                    'Nombre': clean_name, 'Rol': role, 'Fecha': date_obj, 'Turno_Raw': shift_val
+                })
     except Exception as e: st.error(f"Error en {role}: {e}")
     return pd.DataFrame(extracted_data)
 
@@ -144,7 +152,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V37 (Base Solida) ---
+# --- MOTOR LÓGICO ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -174,7 +182,8 @@ def logic_engine(df, no_tica_list):
         elif r['Rol'] == 'Supervisor': role_rank = 40
             
         if not hours:
-            rows.append({**r, 'Hora': -1, 'Tarea': str(r['Turno_Raw']), 'Counter': '-', 'Role_Rank': role_rank, 'Sub_Group': sub_group, 'Start_H': -1, 'Base_Diaria': '-'})
+            # Aseguramos que existan filas aunque sea Libre
+            rows.append({**r, 'Hora': -1, 'Tarea': str(r['Turno_Raw']), 'Counter': 'Libre', 'Role_Rank': role_rank, 'Sub_Group': sub_group, 'Start_H': -1, 'Base_Diaria': '-'})
         else:
             for h in hours:
                 current_date = r['Fecha']
@@ -363,7 +372,7 @@ def logic_engine(df, no_tica_list):
     final_bases = {}
     grouped = df_h[df_h['Hora'] != -1].groupby(['Nombre', 'Fecha'])
     for (name, date), group in grouped:
-        valid_counts = group[~group['Counter'].isin(['Casino', 'Oficina', 'General'])]['Counter'].value_counts()
+        valid_counts = group[~group['Counter'].isin(['Casino', 'Oficina', 'General', 'Libre'])]['Counter'].value_counts()
         real_base = valid_counts.index[0] if not valid_counts.empty else group['Counter'].mode()[0]
         final_bases[(name, date)] = real_base
         for idx in group.index:
@@ -371,7 +380,7 @@ def logic_engine(df, no_tica_list):
             if "Cubrir" in task and (real_base in task or real_base in cnt): df_h.at[idx, 'Tarea'] = '1'
 
     for idx, row in df_h.iterrows():
-        if row['Hora'] != -1: df_h.at[idx, 'Base_Diaria'] = final_bases.get((row['Nombre'], row['Fecha']), "-")
+        if row['Hora'] != -1: df_h.at[idx, 'Base_Diaria'] = final_bases.get((row['Nombre'], row['Fecha']), "Libre")
 
     # HHEE Rows
     unique_dates = sorted(df_h['Fecha'].unique())
@@ -404,13 +413,13 @@ def logic_engine(df, no_tica_list):
 
     return df_h
 
-# --- EXCEL INTELLIGENCE (V44 FIX) ---
+# --- EXCEL GENERATOR (V45 FIX) ---
 def make_excel(df, start_d, end_d):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
     
     # ----------------------------------------
-    # DEFINICIÓN TEMPRANA DE ESTILOS (FIX V44)
+    # DEFINICIÓN TEMPRANA DE ESTILOS
     # ----------------------------------------
     f_cabify = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#7145D6', 'font_color': 'white', 'align': 'center'})
     f_base = wb.add_format({'border': 1, 'align': 'center', 'font_size': 9, 'text_wrap': True})
@@ -421,7 +430,6 @@ def make_excel(df, start_d, end_d):
     f_nac = wb.add_format({'bg_color': '#FCE4D6', 'border': 1, 'align': 'center'})
     f_int = wb.add_format({'bg_color': '#DDEBF7', 'border': 1, 'align': 'center'})
     
-    # Mapa de Estilos (Disponible desde el inicio)
     st_map = {
         '2': wb.add_format({'bg_color': '#FFF2CC', 'border': 1, 'align': 'center'}),
         '3': wb.add_format({'bg_color': '#BDD7EE', 'border': 1, 'align': 'center', 'font_size': 8, 'text_wrap': True}),
@@ -432,17 +440,16 @@ def make_excel(df, start_d, end_d):
         'Int': f_int
     }
     
-    # Datos base
     all_dates = sorted(df['Fecha'].unique())
     dates = [d for d in all_dates if start_d <= d.date() <= end_d]
     df_sorted = df[['Nombre', 'Rol', 'Sub_Group', 'Role_Rank']].drop_duplicates().sort_values(['Role_Rank', 'Nombre'])
     
     # ------------------------------------------------
-    # HOJA 0: DATOS (Oculta, para listas)
+    # HOJA 0: DATOS (Oculta)
     # ------------------------------------------------
     ws_data = wb.add_worksheet("Datos_Validacion")
-    unique_roles = sorted(df['Rol'].unique())
-    unique_names = sorted(df['Nombre'].unique())
+    unique_roles = sorted([str(x) for x in df['Rol'].unique()])
+    unique_names = sorted([str(x) for x in df['Nombre'].unique()])
     
     ws_data.write(0, 0, "Roles")
     ws_data.write_column(1, 0, unique_roles)
@@ -454,7 +461,7 @@ def make_excel(df, start_d, end_d):
     role_range = f"Datos_Validacion!$A$2:$A${len(unique_roles)+1}"
 
     # ------------------------------------------------
-    # HOJA 1: PLAN TEÓRICO (Estática - Referencia)
+    # HOJA 1: PLAN TEÓRICO (Oculta - Backup)
     # ------------------------------------------------
     ws_teorico = wb.add_worksheet("Plan_Teorico")
     ws_teorico.write(0, 0, "ID") 
@@ -472,14 +479,14 @@ def make_excel(df, start_d, end_d):
                 try:
                     val = subset[subset['Hora'] == h]
                     if not val.empty: task = str(val.iloc[0]['Tarea'])
-                    else: task = ""
+                    else: task = "Libre" # Llenar vacíos con 'Libre' para que INDEX no devuelva 0
                     ws_teorico.write(teorico_row, 1+h, task)
-                except: pass
+                except: ws_teorico.write(teorico_row, 1+h, "Libre")
             teorico_row += 1
     ws_teorico.hide()
 
     # ------------------------------------------------
-    # HOJA 2: BITÁCORA (Input)
+    # HOJA 2: BITÁCORA
     # ------------------------------------------------
     ws_bit = wb.add_worksheet("Bitacora_Incidencias")
     headers_bit = ["Tipo Colaborador", "Nombre Colaborador", "Fecha (YYYY-MM-DD)", "Tipo Incidencia", "Hora Inicio (0-23)", "Hora Fin (0-23)"]
@@ -490,9 +497,8 @@ def make_excel(df, start_d, end_d):
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
     
     ws_bit.write(0, 7, "GUÍA:", f_cabify)
-    ws_bit.write(1, 7, "1. Seleccione Rol y Nombre.")
-    ws_bit.write(2, 7, "2. INASISTENCIA: Marque el tipo y NO se preocupe por las horas.")
-    ws_bit.write(3, 7, "3. ATRASO/SALIDA: Ingrese la hora de inicio y fin.")
+    ws_bit.write(1, 7, "1. INASISTENCIA: Marque el tipo y el sistema marcará todo el día como FALTA automáticamente.")
+    ws_bit.write(2, 7, "2. ATRASO/SALIDA: Ingrese la hora de inicio y fin para afectar solo ese rango.")
 
     # ------------------------------------------------
     # HOJA 3: PLAN OPERATIVO (Dinámica)
@@ -506,6 +512,7 @@ def make_excel(df, start_d, end_d):
     col = 2
     d_map = {}
     
+    # Encabezados
     ws_real.write(2, 0, "DOTACIÓN AGENTES", f_header_count)
     ws_real.write(3, 0, "DOTACIÓN COORDINADORES", f_header_count)
     ws_real.write(4, 0, "DOTACIÓN ANFITRIONES", f_header_count)
@@ -560,7 +567,12 @@ def make_excel(df, start_d, end_d):
             if subset.empty:
                 ws_real.write(row, c_start, "-", f_base)
                 ws_real.write(row, c_start+1, "Libre", f_base)
-                for h in range(24): ws_real.write(row, c_start+2+h, "", f_base)
+                for h in range(24): 
+                    # Fórmula busca Libre en Teorico
+                    key = f"{n}_{d_iso}"
+                    col_plan_letter = xlsxwriter.utility.xl_col_to_name(h + 1)
+                    formula = f'INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0))'
+                    ws_real.write_formula(row, c_start+2+h, formula, f_base)
             else:
                 t_raw = subset.iloc[0]['Turno_Raw']
                 try: lugar = subset.iloc[0]['Base_Diaria']
@@ -576,6 +588,7 @@ def make_excel(df, start_d, end_d):
                 key = f"{n}_{d_iso}"
                 for h in range(24):
                     col_plan_letter = xlsxwriter.utility.xl_col_to_name(h + 1)
+                    # Fórmula inteligente V45
                     formula = (
                         f'=IF(COUNTIFS(Bitacora_Incidencias!$B:$B,"{n}",Bitacora_Incidencias!$C:$C,"{d_iso}",'
                         f'Bitacora_Incidencias!$D:$D,"Inasistencia")>0,"FALTA",'
@@ -583,28 +596,11 @@ def make_excel(df, start_d, end_d):
                         f'Bitacora_Incidencias!$E:$E,"<={h}",Bitacora_Incidencias!$F:$F,">={h}")>0,"INCIDENCIA",'
                         f'INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0))))'
                     )
-                    
-                    # Aplicar estilo de celda si tenemos el valor en Python (para el color base)
-                    # Pero es fórmula... así que usamos formato por defecto + Condicional
                     ws_real.write_formula(row, c_start+2+h, formula, f_base)
-                    
-                    # Hack: Aplicar estilo estático si sabemos el valor base (para que se vea bonito si no hay incidencia)
-                    try:
-                        val = subset[subset['Hora'] == h]
-                        if not val.empty:
-                            t_val = str(val.iloc[0]['Tarea'])
-                            # Usamos st_map aquí porque ya está definido al inicio (FIX V44)
-                            if t_val in st_map: 
-                                # Sobrescribimos el formato de la celda? No, write_formula toma un solo formato.
-                                # Excel prioriza Conditional Formatting sobre Cell Format.
-                                # Así que f_base está bien, el condicional dará el color.
-                                pass
-                            elif r == "Anfitrion":
-                                if "Nac" in t_val: pass # Se manejará por condicional
-                    except: pass
 
         row += 1
         
+    # Formato Condicional
     end_col_let = xlsxwriter.utility.xl_col_to_name(col-1)
     data_range = f"C8:{end_col_let}{row}"
     
@@ -622,7 +618,7 @@ def make_excel(df, start_d, end_d):
         ws_real.conditional_format(data_range, {'type': 'text' if len(k)>2 else 'cell', 'criteria': criteria, 'value': val, 'format': fmt})
 
     # ------------------------------------------------
-    # HOJA 4: RESUMEN (V37)
+    # HOJA 4: RESUMEN
     # ------------------------------------------------
     ws_res = wb.add_worksheet("Resumen_Estadistico")
     f_bold = wb.add_format({'bold': True})
@@ -664,7 +660,7 @@ def make_excel(df, start_d, end_d):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V44"):
+if st.sidebar.button("🚀 Generar Planificación V45"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -679,5 +675,5 @@ if st.sidebar.button("🚀 Generar Planificación V44"):
             if full.empty: st.error("Sin datos.")
             else:
                 final = logic_engine(full, agents_no_tica)
-                st.success("¡Listo! Descarga la Suite Operativa V44.")
-                st.download_button("📥 Descargar Suite (V44)", make_excel(final, start_d, end_d), f"Planificacion_Operativa.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V45.")
+                st.download_button("📥 Descargar Suite (V45)", make_excel(final, start_d, end_d), f"Planificacion_Operativa.xlsx")
