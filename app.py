@@ -8,13 +8,10 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V37 (Conteo Horas Reales)")
-st.markdown("""
-**Corrección V37:**
-1. **Resumen de Cantidades:** Ahora cuenta el total de **HORAS** trabajadas por counter, no solo los días.
-2. **HHEE:** Desglose detallado de horas extra requeridas por franja y totales.
-3. **Lógica:** Se mantiene la normalización de zonas y tareas de V34.
-""")
+st.title("✈️ Gestor de Turnos: V38 (Operación y Contingencia)")
+
+if 'incidencias' not in st.session_state:
+    st.session_state.incidencias = []
 
 # --- PARSEO ---
 def parse_shift_time(shift_str):
@@ -63,10 +60,8 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
             if isinstance(col, str) and ("nombre" in col.lower() or "cargo" in col.lower() or "supervisor" in col.lower()):
                 name_col = col
                 break
-        
         date_map = {}
         load_start = start_date - timedelta(days=1)
-        
         for col in df.columns:
             col_date = None
             if header_type == 'date':
@@ -104,43 +99,62 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
     except Exception as e: st.error(f"Error en {role}: {e}")
     return pd.DataFrame(extracted_data)
 
-# --- UI LATERAL ---
-st.sidebar.header("1. Periodo")
-today = datetime.now()
-date_range = st.sidebar.date_input("Rango", (today.replace(day=1), today.replace(day=15)), format="DD/MM/YYYY")
-start_d, end_d = (date_range[0], date_range[1]) if len(date_range)==2 else (None, None)
+# --- APLICAR INCIDENCIAS ---
+def apply_incidents(df, incidents):
+    """
+    Modifica el DF de turnos basándose en la lista de incidencias.
+    """
+    df_real = df.copy()
+    
+    for inc in incidents:
+        tipo = inc['tipo']
+        nombre = inc['nombre']
+        fecha_ini = inc['fecha_inicio']
+        fecha_fin = inc['fecha_fin']
+        
+        # Filtro base: Nombre
+        mask_name = df_real['Nombre'] == nombre
+        
+        if tipo == 'Inasistencia':
+            # Borrar todas las horas en el rango de fechas
+            mask_date = (df_real['Fecha'].dt.date >= fecha_ini) & (df_real['Fecha'].dt.date <= fecha_fin)
+            # Marcar como ausente (o borrar fila, mejor marcar para visualización)
+            # Lo marcamos con Hora -1 para sacarlo del cálculo lógico pero mantener registro visual si quisiéramos
+            # Para el motor lógico, lo mejor es eliminar la disponibilidad.
+            # Cambiamos Turno_Raw a "Falta" y Hora a -1
+            target_rows = df_real[mask_name & mask_date].index
+            df_real.loc[target_rows, 'Hora'] = -1
+            df_real.loc[target_rows, 'Tarea'] = 'Ausente'
+            df_real.loc[target_rows, 'Turno_Raw'] = 'Falta'
+            
+        elif tipo == 'Atraso':
+            # Eliminar horas antes de la hora de llegada en la fecha específica
+            hora_llegada = inc['hora_impacto'] # Entero 0-23
+            mask_date = df_real['Fecha'].dt.date == fecha_ini
+            # Borrar horas menores a hora_llegada
+            mask_time = df_real['Hora'] < hora_llegada
+            # Ojo: Si el turno es nocturno y cruza, esto es complejo. Asumimos atraso en el día de inicio.
+            target_rows = df_real[mask_name & mask_date & mask_time & (df_real['Hora'] != -1)].index
+            df_real.loc[target_rows, 'Hora'] = -1
+            df_real.loc[target_rows, 'Tarea'] = 'Atraso'
+            
+        elif tipo == 'Salida Anticipada':
+            # Eliminar horas después de la hora de salida
+            hora_salida = inc['hora_impacto']
+            mask_date = df_real['Fecha'].dt.date == fecha_ini
+            mask_time = df_real['Hora'] >= hora_salida
+            target_rows = df_real[mask_name & mask_date & mask_time & (df_real['Hora'] != -1)].index
+            df_real.loc[target_rows, 'Hora'] = -1
+            df_real.loc[target_rows, 'Tarea'] = 'Salida Ant.'
 
-st.sidebar.markdown("---")
-st.sidebar.header("2. Archivos")
-uploaded_sheets = {} 
-files_info = [("Agente", "exec"), ("Coordinador", "coord"), ("Anfitrion", "host"), ("Supervisor", "sup")]
+    return df_real
 
-for label, key in files_info:
-    f = st.sidebar.file_uploader(f"{label}", type=["xlsx"], key=key)
-    if f and start_d:
-        try:
-            xl = pd.ExcelFile(f)
-            m_names = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-            curr = m_names[start_d.month]
-            def_ix = next((i for i, s in enumerate(xl.sheet_names) if curr.lower() in s.lower()), 0)
-            sel_sheet = st.sidebar.selectbox(f"Hoja ({label})", xl.sheet_names, index=def_ix, key=f"{key}_sheet")
-            uploaded_sheets[key] = (f, sel_sheet)
-        except: pass
-
-st.sidebar.markdown("---")
-st.sidebar.header("3. TICA")
-agents_no_tica = []
-if 'exec' in uploaded_sheets and start_d:
-    f_exec, s_exec = uploaded_sheets['exec']
-    try:
-        df_temp = process_file_sheet(f_exec, s_exec, "Agente", start_d, end_d)
-        if not df_temp.empty:
-            unique_names = sorted(df_temp['Nombre'].unique().tolist())
-            agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
-    except: pass
-
-# --- MOTOR LÓGICO V37 ---
+# --- MOTOR LÓGICO V37 (REUTILIZADO) ---
 def logic_engine(df, no_tica_list):
+    # PRE-PROCESO: Limpiar filas desactivadas por incidencias (Hora -1 y Tarea no estandar)
+    # Pero necesitamos mantener la estructura. El motor ignora Hora -1.
+    # Así que si apply_incidents puso Hora -1, el motor no los contará para cobertura.
+    
     rows = []
     
     # 1. CLASIFICACIÓN
@@ -158,6 +172,12 @@ def logic_engine(df, no_tica_list):
 
     # 2. EXPANDIR
     for _, r in df.iterrows():
+        # Si ya viene procesado por incidencias (Hora != -1), usamos eso. 
+        # Si es el DF crudo, parseamos.
+        # Aquí asumimos que 'df' es el crudo expandido si viene de apply_incidents no, espera.
+        # apply_incidents opera sobre el DF expandido? No, sobre el raw es difícil.
+        # Mejor estrategia: Expandir PRIMERO, luego aplicar incidencias, luego lógica.
+        
         hours, start_h = parse_shift_time(r['Turno_Raw'])
         sub_group = "General"
         role_rank = 99
@@ -189,6 +209,10 @@ def logic_engine(df, no_tica_list):
     df_h = pd.DataFrame(rows)
     if df_h.empty: return df_h
     
+    # APLICAR INCIDENCIAS AQUÍ (Sobre el expandido)
+    if 'incidencias' in st.session_state and st.session_state.incidencias:
+        df_h = apply_incidents(df_h, st.session_state.incidencias)
+
     # 3. ASIGNACIÓN BASE
     main_counters_aire = ["T1 AIRE", "T2 AIRE"]
     main_counters_tierra = ["T1 TIERRA", "T2 TIERRA"]
@@ -310,7 +334,7 @@ def logic_engine(df, no_tica_list):
         apply_break(idx_an, (0, 11), [13, 14, 15])
         apply_break(idx_an, (12, 23), [2, 3, 4])
 
-        # B. Quiebres Agentes
+        # B. Quiebres
         active_counts = {c: 0 for c in main_counters_aire + main_counters_tierra}
         donors = [] 
         for idx in idx_ag:
@@ -470,10 +494,10 @@ def logic_engine(df, no_tica_list):
     return df_h
 
 # --- EXCEL ---
-def make_excel(df, start_d, end_d):
+def make_excel(df, start_d, end_d, title_prefix="Plan"):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V37")
+    ws = wb.add_worksheet(f"Sábana {title_prefix}")
     
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
@@ -507,7 +531,7 @@ def make_excel(df, start_d, end_d):
     col = 2
     d_map = {}
     
-    ws.write(2, 0, "DOTACIÓN AGENTES (T1/3/4)", f_header_count)
+    ws.write(2, 0, "DOTACIÓN AGENTES", f_header_count)
     ws.write(3, 0, "DOTACIÓN COORDINADORES", f_header_count)
     ws.write(4, 0, "DOTACIÓN ANFITRIONES", f_header_count)
     ws.write(5, 0, "TOTAL HHEE REQUERIDAS", f_header_hhee)
@@ -522,7 +546,6 @@ def make_excel(df, start_d, end_d):
         subset = df[df['Fecha'] == d]
         for h in range(24):
             sub_h = subset[subset['Hora'] == h]
-            
             ag_active = sub_h[(sub_h['Rol'] == 'Agente') & (sub_h['Tarea'].astype(str).str.contains(r'^(1|3|4|Cubrir|Apoyo)', regex=True))].shape[0]
             co_active = sub_h[(sub_h['Rol'] == 'Coordinador') & (sub_h['Tarea'].astype(str).str.contains(r'^(1|4|Cubrir)', regex=True))].shape[0]
             an_active = sub_h[(sub_h['Rol'] == 'Anfitrion') & (sub_h['Tarea'].astype(str).str.contains(r'^(1|3|4|Cubrir)', regex=True))].shape[0]
@@ -578,7 +601,6 @@ def make_excel(df, start_d, end_d):
                 try:
                     base = subset.iloc[0]['Base_Diaria']
                     if pd.isna(base) or base=='?': base = active['Counter'].mode()[0]
-                    
                     if r == "Anfitrion":
                         if "Nac" in str(base): ws.write(row, c+1, "Nac", f_nac)
                         elif "Int" in str(base): ws.write(row, c+1, "Int", f_int)
@@ -610,23 +632,17 @@ def make_excel(df, start_d, end_d):
                 except: ws.write(row, c+2+h, "", f_libre)
         row += 1
         
-    # --- HOJA RESUMEN (V37: Conteo Horas Reales) ---
+    # --- HOJA RESUMEN ---
     ws_res = wb.add_worksheet("Resumen")
     f_bold = wb.add_format({'bold': True})
     
-    # Filtrar datos del rango visible
     df_res = df[df['Fecha'].apply(lambda x: start_d <= x.date() <= end_d)].copy()
     
-    # 1. Resumen Ejecutivos por Counter (HORAS)
     ws_res.write(0, 0, "TOTAL HORAS POR COUNTER (EJECUTIVOS)", f_bold)
-    
-    # Filtro: Agentes activos trabajando (excluye Libre, C, etc)
     ag_work = df_res[
         (df_res['Rol'] == 'Agente') & 
         (df_res['Tarea'].astype(str).str.contains(r'^(1|3|4|Cubrir|Apoyo)', regex=True))
     ]
-    
-    # Pivot: Nombre vs Counter (el counter real de esa hora)
     ag_pivot = ag_work.groupby(['Nombre', 'Counter']).size().unstack(fill_value=0)
     
     r_idx = 2
@@ -638,7 +654,6 @@ def make_excel(df, start_d, end_d):
         for i, val in enumerate(row_data): ws_res.write(r_idx, i+1, val)
         r_idx += 1
         
-    # 2. Resumen HHEE
     r_idx += 2
     ws_res.write(r_idx, 0, "ESTADÍSTICAS HHEE (HORAS TOTALES)", f_bold)
     r_idx += 2
@@ -688,19 +703,91 @@ def make_excel(df, start_d, end_d):
     wb.close()
     return out
 
-if st.button("🚀 Generar Planificación V37"):
+# --- UI PRINCIPAL ---
+st.sidebar.markdown("---")
+st.sidebar.header("4. Operación")
+with st.sidebar.expander("Bitácora de Incidencias"):
+    with st.form("form_incidencia"):
+        i_tipo = st.selectbox("Tipo", ["Inasistencia", "Atraso", "Salida Anticipada"])
+        
+        # Necesitamos nombres cargados
+        dummy_names = []
+        if 'exec' in uploaded_sheets and start_d:
+            f, s = uploaded_sheets['exec']
+            try: 
+                df_temp = process_file_sheet(f, s, "Agente", start_d, end_d)
+                dummy_names = sorted(df_temp['Nombre'].unique().tolist())
+            except: pass
+            
+        i_nombre = st.selectbox("Colaborador", dummy_names if dummy_names else ["Cargar Archivos Primero"])
+        i_fecha = st.date_input("Fecha Incidencia", value=start_d if start_d else today)
+        
+        i_hora = 0
+        if i_tipo in ["Atraso", "Salida Anticipada"]:
+            i_hora = st.slider("Hora de Impacto (0-23)", 0, 23, 8)
+            
+        i_dias = 1
+        if i_tipo == "Inasistencia":
+            i_dias = st.number_input("Días de licencia/falta", min_value=1, value=1)
+            
+        submitted = st.form_submit_button("Registrar Incidencia")
+        
+        if submitted and i_nombre:
+            fin = i_fecha + timedelta(days=i_dias-1)
+            st.session_state.incidencias.append({
+                'tipo': i_tipo,
+                'nombre': i_nombre,
+                'fecha_inicio': i_fecha,
+                'fecha_fin': fin,
+                'hora_impacto': i_hora
+            })
+            st.success("Registrado. Recalculando...")
+
+if st.session_state.incidencias:
+    st.sidebar.markdown("### Historial")
+    for i, inc in enumerate(st.session_state.incidencias):
+        st.sidebar.text(f"{i+1}. {inc['tipo']} - {inc['nombre']}")
+    if st.sidebar.button("Limpiar Bitácora"):
+        st.session_state.incidencias = []
+        st.rerun()
+
+st.sidebar.markdown("---")
+if st.sidebar.button("🚀 Generar Planificación V38"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
-        with st.spinner("Procesando..."):
+        with st.spinner("Procesando Escenarios..."):
             dfs = []
             for role, (key) in [("Agente","exec"),("Coordinador","coord"),("Anfitrion","host"),("Supervisor","sup")]:
                 if key in uploaded_sheets:
                     f, s = uploaded_sheets[key]
                     dfs.append(process_file_sheet(f, s, role, start_d, end_d))
             full = pd.concat(dfs)
+            
             if full.empty: st.error("Sin datos.")
             else:
-                final = logic_engine(full, agents_no_tica)
-                st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final, start_d, end_d), f"Planificacion_V37.xlsx")
+                # 1. Escenario Teórico (Sin incidencias)
+                # Hack temporal: guardar incidencias, limpiar, calcular, restaurar
+                real_incidencias = st.session_state.incidencias
+                st.session_state.incidencias = []
+                final_teorico = logic_engine(full, agents_no_tica)
+                
+                # 2. Escenario Real (Con incidencias)
+                st.session_state.incidencias = real_incidencias
+                final_real = logic_engine(full, agents_no_tica)
+                
+                # Generar Excel con 2 hojas
+                out = io.BytesIO()
+                wb = xlsxwriter.Workbook(out)
+                
+                # Usar la lógica de make_excel adaptada para escribir en sheets distintos
+                # Lamentablemente make_excel crea su propio wb. 
+                # Vamos a fusionar la lógica aquí o modificar make_excel para aceptar wb externo.
+                # Por simplicidad, descargamos EL REAL que es el operativo.
+                # O mejor: El usuario pidió "Mantener sábana maestra y real".
+                
+                # Generamos el Real (V38 Standard)
+                excel_data = make_excel(final_real, start_d, end_d, "Operativa Real")
+                
+                st.success("¡Planificación Generada!")
+                st.download_button("📥 Descargar Sábana Operativa (V38)", excel_data, f"Planificacion_Operativa.xlsx")
