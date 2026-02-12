@@ -8,13 +8,12 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V36 (Dashboard y Resúmenes)")
+st.title("✈️ Gestor de Turnos: V37 (Conteo Horas Reales)")
 st.markdown("""
-**Novedades V36:**
-1. **Fila HHEE:** Contador horario de Horas Extra en la sábana principal.
-2. **Hoja Resumen:** Nueva pestaña con estadísticas:
-    * Frecuencia de Ejecutivos por Counter.
-    * HHEE Totales, Por Hora, Por Día y Por Zona.
+**Corrección V37:**
+1. **Resumen de Cantidades:** Ahora cuenta el total de **HORAS** trabajadas por counter, no solo los días.
+2. **HHEE:** Desglose detallado de horas extra requeridas por franja y totales.
+3. **Lógica:** Se mantiene la normalización de zonas y tareas de V34.
 """)
 
 # --- PARSEO ---
@@ -67,6 +66,7 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
         
         date_map = {}
         load_start = start_date - timedelta(days=1)
+        
         for col in df.columns:
             col_date = None
             if header_type == 'date':
@@ -139,7 +139,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V36 ---
+# --- MOTOR LÓGICO V37 ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -473,7 +473,7 @@ def logic_engine(df, no_tica_list):
 def make_excel(df, start_d, end_d):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
-    ws = wb.add_worksheet("Sábana V36")
+    ws = wb.add_worksheet("Sábana V37")
     
     f_head = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#44546A', 'font_color': 'white', 'align': 'center'})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#D9E1F2', 'align': 'center'})
@@ -526,7 +526,6 @@ def make_excel(df, start_d, end_d):
             ag_active = sub_h[(sub_h['Rol'] == 'Agente') & (sub_h['Tarea'].astype(str).str.contains(r'^(1|3|4|Cubrir|Apoyo)', regex=True))].shape[0]
             co_active = sub_h[(sub_h['Rol'] == 'Coordinador') & (sub_h['Tarea'].astype(str).str.contains(r'^(1|4|Cubrir)', regex=True))].shape[0]
             an_active = sub_h[(sub_h['Rol'] == 'Anfitrion') & (sub_h['Tarea'].astype(str).str.contains(r'^(1|3|4|Cubrir)', regex=True))].shape[0]
-            
             hhee_active = sub_h[(sub_h['Rol'] == 'HHEE') & (sub_h['Tarea'] == 'HHEE')].shape[0]
             
             ws.write(2, col+2+h, ag_active, f_header_count)
@@ -611,18 +610,24 @@ def make_excel(df, start_d, end_d):
                 except: ws.write(row, c+2+h, "", f_libre)
         row += 1
         
-    # --- HOJA RESUMEN ---
+    # --- HOJA RESUMEN (V37: Conteo Horas Reales) ---
     ws_res = wb.add_worksheet("Resumen")
     f_bold = wb.add_format({'bold': True})
     
-    # Datos para resumen
-    # Filtramos fechas
+    # Filtrar datos del rango visible
     df_res = df[df['Fecha'].apply(lambda x: start_d <= x.date() <= end_d)].copy()
     
-    # 1. Resumen Ejecutivos por Counter
-    ws_res.write(0, 0, "FRECUENCIA DE EJECUTIVOS POR COUNTER", f_bold)
-    ag_summary = df_res[(df_res['Rol'] == 'Agente') & (df_res['Hora'] != -1)].drop_duplicates(subset=['Nombre', 'Fecha'])
-    ag_pivot = ag_summary.groupby(['Nombre', 'Base_Diaria']).size().unstack(fill_value=0)
+    # 1. Resumen Ejecutivos por Counter (HORAS)
+    ws_res.write(0, 0, "TOTAL HORAS POR COUNTER (EJECUTIVOS)", f_bold)
+    
+    # Filtro: Agentes activos trabajando (excluye Libre, C, etc)
+    ag_work = df_res[
+        (df_res['Rol'] == 'Agente') & 
+        (df_res['Tarea'].astype(str).str.contains(r'^(1|3|4|Cubrir|Apoyo)', regex=True))
+    ]
+    
+    # Pivot: Nombre vs Counter (el counter real de esa hora)
+    ag_pivot = ag_work.groupby(['Nombre', 'Counter']).size().unstack(fill_value=0)
     
     r_idx = 2
     ws_res.write(r_idx, 0, "Nombre", f_bold)
@@ -640,12 +645,10 @@ def make_excel(df, start_d, end_d):
     
     hhee_active = df_res[(df_res['Rol'] == 'HHEE') & (df_res['Tarea'] == 'HHEE')]
     
-    # Total
     ws_res.write(r_idx, 0, "Total HHEE Requeridas:", f_bold)
     ws_res.write(r_idx, 1, len(hhee_active))
     r_idx += 2
     
-    # Por Franja
     ws_res.write(r_idx, 0, "Por Franja Horaria", f_bold)
     ws_res.write(r_idx, 1, "Cantidad", f_bold)
     by_hour = hhee_active['Hora'].value_counts().sort_index()
@@ -654,8 +657,7 @@ def make_excel(df, start_d, end_d):
         ws_res.write(r_idx, 0, f"{h}:00 - {h+1}:00")
         ws_res.write(r_idx, 1, count)
         
-    # Por Día Semana
-    r_idx = r_idx - len(by_hour) # Reset row to put next table side-by-side
+    r_idx = r_idx - len(by_hour) 
     base_r = r_idx
     col_off = 3
     ws_res.write(base_r, col_off, "Por Día de Semana", f_bold)
@@ -672,7 +674,6 @@ def make_excel(df, start_d, end_d):
             ws_res.write(curr_r, col_off, d_name)
             ws_res.write(curr_r, col_off+1, by_day[d_name])
             
-    # Por Tipo/Zona
     col_off = 6
     ws_res.write(base_r, col_off, "Por Zona/Counter", f_bold)
     ws_res.write(base_r, col_off+1, "Cantidad", f_bold)
@@ -687,7 +688,7 @@ def make_excel(df, start_d, end_d):
     wb.close()
     return out
 
-if st.button("🚀 Generar Planificación V36"):
+if st.button("🚀 Generar Planificación V37"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -702,4 +703,4 @@ if st.button("🚀 Generar Planificación V36"):
             else:
                 final = logic_engine(full, agents_no_tica)
                 st.success("¡Listo!")
-                st.download_button("📥 Descargar Excel", make_excel(final, start_d, end_d), f"Planificacion_V36.xlsx")
+                st.download_button("📥 Descargar Excel", make_excel(final, start_d, end_d), f"Planificacion_V37.xlsx")
