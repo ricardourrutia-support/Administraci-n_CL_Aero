@@ -8,13 +8,14 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V39 (Estabilidad Total)")
+st.title("✈️ Gestor de Turnos: V40 (Corrección NameError)")
 
-# --- INICIALIZACIÓN DE VARIABLES GLOBALES (Evita NameError) ---
+# --- INICIALIZACIÓN ROBUSTA (Evita caídas por variables no definidas) ---
 if 'incidencias' not in st.session_state:
     st.session_state.incidencias = []
 
-# Variables críticas iniciadas por defecto
+# Variables globales críticas iniciadas al principio
+today = datetime.now()  # <--- AQUÍ ESTÁ LA CORRECCIÓN
 uploaded_sheets = {}
 start_d = None
 end_d = None
@@ -67,42 +68,46 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
             if isinstance(col, str) and ("nombre" in col.lower() or "cargo" in col.lower() or "supervisor" in col.lower()):
                 name_col = col
                 break
+        
         date_map = {}
-        load_start = start_date - timedelta(days=1)
-        for col in df.columns:
-            col_date = None
-            if header_type == 'date':
-                if isinstance(col, (datetime, pd.Timestamp)): col_date = col
-                elif isinstance(col, str):
-                    try: col_date = pd.to_datetime(col)
+        # Cargar desde dia previo para continuidad
+        # Si start_date es None (no seleccionado aun), no procesar fechas
+        if start_date:
+            load_start = start_date - timedelta(days=1)
+            for col in df.columns:
+                col_date = None
+                if header_type == 'date':
+                    if isinstance(col, (datetime, pd.Timestamp)): col_date = col
+                    elif isinstance(col, str):
+                        try: col_date = pd.to_datetime(col)
+                        except: pass
+                elif header_type == 'number':
+                    try: 
+                        d_num = int(float(col))
+                        col_date = datetime(start_date.year, start_date.month, d_num)
+                        if d_num > 20 and start_date.day < 5:
+                             col_date = col_date - timedelta(days=30)
                     except: pass
-            elif header_type == 'number':
-                try: 
-                    d_num = int(float(col))
-                    col_date = datetime(start_date.year, start_date.month, d_num)
-                    if d_num > 20 and start_date.day < 5:
-                         col_date = col_date - timedelta(days=30)
-                except: pass
-            if col_date:
-                c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
-                if load_start <= c_dt <= end_date:
-                    date_map[col] = col_date
+                if col_date:
+                    c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
+                    if load_start <= c_dt <= end_date:
+                        date_map[col] = col_date
 
-        for idx, row in df.iterrows():
-            name_val = row[name_col]
-            if pd.isna(name_val): continue
-            s_name = str(name_val).strip()
-            if s_name == "" or len(s_name) < 3: continue
-            if any(k in s_name.lower() for k in ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas"]): continue
-            if s_name.replace('.', '', 1).isdigit(): continue
+            for idx, row in df.iterrows():
+                name_val = row[name_col]
+                if pd.isna(name_val): continue
+                s_name = str(name_val).strip()
+                if s_name == "" or len(s_name) < 3: continue
+                if any(k in s_name.lower() for k in ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas"]): continue
+                if s_name.replace('.', '', 1).isdigit(): continue
 
-            clean_name = s_name.title()
-            for col_name, date_obj in date_map.items():
-                shift_val = row[col_name]
-                if pd.isna(shift_val): shift_val = "Libre"
-                extracted_data.append({
-                    'Nombre': clean_name, 'Rol': role, 'Fecha': date_obj, 'Turno_Raw': shift_val
-                })
+                clean_name = s_name.title()
+                for col_name, date_obj in date_map.items():
+                    shift_val = row[col_name]
+                    if pd.isna(shift_val): shift_val = "Libre"
+                    extracted_data.append({
+                        'Nombre': clean_name, 'Rol': role, 'Fecha': date_obj, 'Turno_Raw': shift_val
+                    })
     except Exception as e: st.error(f"Error en {role}: {e}")
     return pd.DataFrame(extracted_data)
 
@@ -140,7 +145,43 @@ def apply_incidents(df, incidents):
             df_real.loc[target_rows, 'Tarea'] = 'Salida Ant.'
     return df_real
 
-# --- MOTOR LÓGICO V39 ---
+# --- UI LATERAL (ARCHIVOS) ---
+st.sidebar.header("1. Periodo")
+# Usamos la variable 'today' que YA fue inicializada arriba
+date_range = st.sidebar.date_input("Rango", (today.replace(day=1), today.replace(day=15)), format="DD/MM/YYYY")
+if len(date_range) == 2:
+    start_d, end_d = date_range
+
+st.sidebar.markdown("---")
+st.sidebar.header("2. Archivos")
+uploaded_sheets = {} 
+files_info = [("Agente", "exec"), ("Coordinador", "coord"), ("Anfitrion", "host"), ("Supervisor", "sup")]
+
+for label, key in files_info:
+    f = st.sidebar.file_uploader(f"{label}", type=["xlsx"], key=key)
+    if f and start_d:
+        try:
+            xl = pd.ExcelFile(f)
+            m_names = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+            curr = m_names[start_d.month]
+            def_ix = next((i for i, s in enumerate(xl.sheet_names) if curr.lower() in s.lower()), 0)
+            sel_sheet = st.sidebar.selectbox(f"Hoja ({label})", xl.sheet_names, index=def_ix, key=f"{key}_sheet")
+            uploaded_sheets[key] = (f, sel_sheet)
+        except: pass
+
+st.sidebar.markdown("---")
+st.sidebar.header("3. TICA")
+agents_no_tica = []
+if 'exec' in uploaded_sheets and start_d:
+    f_exec, s_exec = uploaded_sheets['exec']
+    try:
+        df_temp = process_file_sheet(f_exec, s_exec, "Agente", start_d, end_d)
+        if not df_temp.empty:
+            unique_names = sorted(df_temp['Nombre'].unique().tolist())
+            agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
+    except: pass
+
+# --- MOTOR LÓGICO ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -190,7 +231,7 @@ def logic_engine(df, no_tica_list):
     df_h = pd.DataFrame(rows)
     if df_h.empty: return df_h
     
-    # APLICAR INCIDENCIAS (SI HAY)
+    # APLICAR INCIDENCIAS
     if 'incidencias' in st.session_state and st.session_state.incidencias:
         df_h = apply_incidents(df_h, st.session_state.incidencias)
 
@@ -473,6 +514,57 @@ def logic_engine(df, no_tica_list):
 
     return df_h
 
+# --- UI LATERAL (BITÁCORA) ---
+st.sidebar.markdown("---")
+st.sidebar.header("4. Operación")
+with st.sidebar.expander("Bitácora de Incidencias"):
+    with st.form("form_incidencia"):
+        i_tipo = st.selectbox("Tipo", ["Inasistencia", "Atraso", "Salida Anticipada"])
+        
+        # Validar variables antes de usarlas
+        dummy_names = []
+        if 'exec' in uploaded_sheets and start_d:
+            f, s = uploaded_sheets['exec']
+            try: 
+                df_temp = process_file_sheet(f, s, "Agente", start_d, end_d)
+                dummy_names = sorted(df_temp['Nombre'].unique().tolist())
+            except: pass
+            
+        i_nombre = st.selectbox("Colaborador", dummy_names if dummy_names else ["Cargar Archivos Primero"])
+        
+        # Corrección: usar today si start_d no existe
+        def_date = start_d if start_d else today
+        i_fecha = st.date_input("Fecha Incidencia", value=def_date)
+        
+        i_hora = 0
+        if i_tipo in ["Atraso", "Salida Anticipada"]:
+            i_hora = st.slider("Hora de Impacto (0-23)", 0, 23, 8)
+            
+        i_dias = 1
+        if i_tipo == "Inasistencia":
+            i_dias = st.number_input("Días de licencia/falta", min_value=1, value=1)
+            
+        submitted = st.form_submit_button("Registrar Incidencia")
+        
+        if submitted and i_nombre:
+            fin = i_fecha + timedelta(days=i_dias-1)
+            st.session_state.incidencias.append({
+                'tipo': i_tipo,
+                'nombre': i_nombre,
+                'fecha_inicio': i_fecha,
+                'fecha_fin': fin,
+                'hora_impacto': i_hora
+            })
+            st.success("Registrado. Recalculando...")
+
+if st.session_state.incidencias:
+    st.sidebar.markdown("### Historial")
+    for i, inc in enumerate(st.session_state.incidencias):
+        st.sidebar.text(f"{i+1}. {inc['tipo']} - {inc['nombre']}")
+    if st.sidebar.button("Limpiar Bitácora"):
+        st.session_state.incidencias = []
+        st.rerun()
+
 # --- EXCEL ---
 def make_excel(df, start_d, end_d, title_prefix="Plan"):
     out = io.BytesIO()
@@ -526,6 +618,7 @@ def make_excel(df, start_d, end_d, title_prefix="Plan"):
         subset = df[df['Fecha'] == d]
         for h in range(24):
             sub_h = subset[subset['Hora'] == h]
+            
             ag_active = sub_h[(sub_h['Rol'] == 'Agente') & (sub_h['Tarea'].astype(str).str.contains(r'^(1|3|4|Cubrir|Apoyo)', regex=True))].shape[0]
             co_active = sub_h[(sub_h['Rol'] == 'Coordinador') & (sub_h['Tarea'].astype(str).str.contains(r'^(1|4|Cubrir)', regex=True))].shape[0]
             an_active = sub_h[(sub_h['Rol'] == 'Anfitrion') & (sub_h['Tarea'].astype(str).str.contains(r'^(1|3|4|Cubrir)', regex=True))].shape[0]
@@ -581,6 +674,7 @@ def make_excel(df, start_d, end_d, title_prefix="Plan"):
                 try:
                     base = subset.iloc[0]['Base_Diaria']
                     if pd.isna(base) or base=='?': base = active['Counter'].mode()[0]
+                    
                     if r == "Anfitrion":
                         if "Nac" in str(base): ws.write(row, c+1, "Nac", f_nac)
                         elif "Int" in str(base): ws.write(row, c+1, "Int", f_int)
@@ -618,7 +712,6 @@ def make_excel(df, start_d, end_d, title_prefix="Plan"):
     
     df_res = df[df['Fecha'].apply(lambda x: start_d <= x.date() <= end_d)].copy()
     
-    # 1. Resumen Ejecutivos por Counter (HORAS)
     ws_res.write(0, 0, "TOTAL HORAS POR COUNTER (EJECUTIVOS)", f_bold)
     ag_work = df_res[
         (df_res['Rol'] == 'Agente') & 
@@ -635,7 +728,6 @@ def make_excel(df, start_d, end_d, title_prefix="Plan"):
         for i, val in enumerate(row_data): ws_res.write(r_idx, i+1, val)
         r_idx += 1
         
-    # 2. Resumen HHEE
     r_idx += 2
     ws_res.write(r_idx, 0, "ESTADÍSTICAS HHEE (HORAS TOTALES)", f_bold)
     r_idx += 2
@@ -685,56 +777,8 @@ def make_excel(df, start_d, end_d, title_prefix="Plan"):
     wb.close()
     return out
 
-# --- UI LATERAL ---
 st.sidebar.markdown("---")
-st.sidebar.header("4. Operación")
-with st.sidebar.expander("Bitácora de Incidencias"):
-    with st.form("form_incidencia"):
-        i_tipo = st.selectbox("Tipo", ["Inasistencia", "Atraso", "Salida Anticipada"])
-        
-        # Validar si uploaded_sheets tiene algo
-        dummy_names = []
-        if 'exec' in uploaded_sheets and start_d:
-            f, s = uploaded_sheets['exec']
-            try: 
-                df_temp = process_file_sheet(f, s, "Agente", start_d, end_d)
-                dummy_names = sorted(df_temp['Nombre'].unique().tolist())
-            except: pass
-            
-        i_nombre = st.selectbox("Colaborador", dummy_names if dummy_names else ["Cargar Archivos Primero"])
-        i_fecha = st.date_input("Fecha Incidencia", value=start_d if start_d else today)
-        
-        i_hora = 0
-        if i_tipo in ["Atraso", "Salida Anticipada"]:
-            i_hora = st.slider("Hora de Impacto (0-23)", 0, 23, 8)
-            
-        i_dias = 1
-        if i_tipo == "Inasistencia":
-            i_dias = st.number_input("Días de licencia/falta", min_value=1, value=1)
-            
-        submitted = st.form_submit_button("Registrar Incidencia")
-        
-        if submitted and i_nombre:
-            fin = i_fecha + timedelta(days=i_dias-1)
-            st.session_state.incidencias.append({
-                'tipo': i_tipo,
-                'nombre': i_nombre,
-                'fecha_inicio': i_fecha,
-                'fecha_fin': fin,
-                'hora_impacto': i_hora
-            })
-            st.success("Registrado. Recalculando...")
-
-if st.session_state.incidencias:
-    st.sidebar.markdown("### Historial")
-    for i, inc in enumerate(st.session_state.incidencias):
-        st.sidebar.text(f"{i+1}. {inc['tipo']} - {inc['nombre']}")
-    if st.sidebar.button("Limpiar Bitácora"):
-        st.session_state.incidencias = []
-        st.rerun()
-
-st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V39"):
+if st.sidebar.button("🚀 Generar Planificación V40"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -757,7 +801,6 @@ if st.sidebar.button("🚀 Generar Planificación V39"):
                 st.session_state.incidencias = real_incidencias
                 final_real = logic_engine(full, agents_no_tica)
                 
-                # Excel
                 excel_data = make_excel(final_real, start_d, end_d, "Operativa Real")
                 st.success("¡Planificación Generada!")
-                st.download_button("📥 Descargar Sábana Operativa (V39)", excel_data, f"Planificacion_Operativa.xlsx")
+                st.download_button("📥 Descargar Sábana Operativa (V40)", excel_data, f"Planificacion_Operativa.xlsx")
