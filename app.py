@@ -8,10 +8,17 @@ import re
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Gestor de Turnos Aeropuerto", layout="wide")
-st.title("✈️ Gestor de Turnos: V38 (Operación y Contingencia)")
+st.title("✈️ Gestor de Turnos: V39 (Estabilidad Total)")
 
+# --- INICIALIZACIÓN DE VARIABLES GLOBALES (Evita NameError) ---
 if 'incidencias' not in st.session_state:
     st.session_state.incidencias = []
+
+# Variables críticas iniciadas por defecto
+uploaded_sheets = {}
+start_d = None
+end_d = None
+agents_no_tica = []
 
 # --- PARSEO ---
 def parse_shift_time(shift_str):
@@ -101,60 +108,40 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
 
 # --- APLICAR INCIDENCIAS ---
 def apply_incidents(df, incidents):
-    """
-    Modifica el DF de turnos basándose en la lista de incidencias.
-    """
     df_real = df.copy()
-    
     for inc in incidents:
         tipo = inc['tipo']
         nombre = inc['nombre']
         fecha_ini = inc['fecha_inicio']
         fecha_fin = inc['fecha_fin']
-        
-        # Filtro base: Nombre
         mask_name = df_real['Nombre'] == nombre
         
         if tipo == 'Inasistencia':
-            # Borrar todas las horas en el rango de fechas
             mask_date = (df_real['Fecha'].dt.date >= fecha_ini) & (df_real['Fecha'].dt.date <= fecha_fin)
-            # Marcar como ausente (o borrar fila, mejor marcar para visualización)
-            # Lo marcamos con Hora -1 para sacarlo del cálculo lógico pero mantener registro visual si quisiéramos
-            # Para el motor lógico, lo mejor es eliminar la disponibilidad.
-            # Cambiamos Turno_Raw a "Falta" y Hora a -1
             target_rows = df_real[mask_name & mask_date].index
             df_real.loc[target_rows, 'Hora'] = -1
             df_real.loc[target_rows, 'Tarea'] = 'Ausente'
             df_real.loc[target_rows, 'Turno_Raw'] = 'Falta'
             
         elif tipo == 'Atraso':
-            # Eliminar horas antes de la hora de llegada en la fecha específica
-            hora_llegada = inc['hora_impacto'] # Entero 0-23
+            hora_llegada = inc['hora_impacto']
             mask_date = df_real['Fecha'].dt.date == fecha_ini
-            # Borrar horas menores a hora_llegada
             mask_time = df_real['Hora'] < hora_llegada
-            # Ojo: Si el turno es nocturno y cruza, esto es complejo. Asumimos atraso en el día de inicio.
             target_rows = df_real[mask_name & mask_date & mask_time & (df_real['Hora'] != -1)].index
             df_real.loc[target_rows, 'Hora'] = -1
             df_real.loc[target_rows, 'Tarea'] = 'Atraso'
             
         elif tipo == 'Salida Anticipada':
-            # Eliminar horas después de la hora de salida
             hora_salida = inc['hora_impacto']
             mask_date = df_real['Fecha'].dt.date == fecha_ini
             mask_time = df_real['Hora'] >= hora_salida
             target_rows = df_real[mask_name & mask_date & mask_time & (df_real['Hora'] != -1)].index
             df_real.loc[target_rows, 'Hora'] = -1
             df_real.loc[target_rows, 'Tarea'] = 'Salida Ant.'
-
     return df_real
 
-# --- MOTOR LÓGICO V37 (REUTILIZADO) ---
+# --- MOTOR LÓGICO V39 ---
 def logic_engine(df, no_tica_list):
-    # PRE-PROCESO: Limpiar filas desactivadas por incidencias (Hora -1 y Tarea no estandar)
-    # Pero necesitamos mantener la estructura. El motor ignora Hora -1.
-    # Así que si apply_incidents puso Hora -1, el motor no los contará para cobertura.
-    
     rows = []
     
     # 1. CLASIFICACIÓN
@@ -172,12 +159,6 @@ def logic_engine(df, no_tica_list):
 
     # 2. EXPANDIR
     for _, r in df.iterrows():
-        # Si ya viene procesado por incidencias (Hora != -1), usamos eso. 
-        # Si es el DF crudo, parseamos.
-        # Aquí asumimos que 'df' es el crudo expandido si viene de apply_incidents no, espera.
-        # apply_incidents opera sobre el DF expandido? No, sobre el raw es difícil.
-        # Mejor estrategia: Expandir PRIMERO, luego aplicar incidencias, luego lógica.
-        
         hours, start_h = parse_shift_time(r['Turno_Raw'])
         sub_group = "General"
         role_rank = 99
@@ -209,7 +190,7 @@ def logic_engine(df, no_tica_list):
     df_h = pd.DataFrame(rows)
     if df_h.empty: return df_h
     
-    # APLICAR INCIDENCIAS AQUÍ (Sobre el expandido)
+    # APLICAR INCIDENCIAS (SI HAY)
     if 'incidencias' in st.session_state and st.session_state.incidencias:
         df_h = apply_incidents(df_h, st.session_state.incidencias)
 
@@ -334,7 +315,7 @@ def logic_engine(df, no_tica_list):
         apply_break(idx_an, (0, 11), [13, 14, 15])
         apply_break(idx_an, (12, 23), [2, 3, 4])
 
-        # B. Quiebres
+        # B. Quiebres Agentes
         active_counts = {c: 0 for c in main_counters_aire + main_counters_tierra}
         donors = [] 
         for idx in idx_ag:
@@ -368,12 +349,11 @@ def logic_engine(df, no_tica_list):
             # 2. Coord
             if not covered:
                 avail_c = [i for i in idx_co if df_h.at[i, 'Tarea'] != 'C']
-                t1_rem = len([i for i in avail_c if df_h.at[i, 'Tarea'] == '1'])
                 cand = None
                 t2_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '2']
                 t1_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '1']
                 if t2_c: cand = t2_c[0]
-                elif t1_c and t1_rem > 1: cand = t1_c[0]
+                elif t1_c: cand = t1_c[0]
                 if cand is not None:
                     df_h.at[cand, 'Tarea'] = f"4: Cubrir {target_cnt}"
                     df_h.at[cand, 'Counter'] = target_cnt
@@ -419,7 +399,7 @@ def logic_engine(df, no_tica_list):
                 t2_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '2']
                 t1_c = [i for i in avail_c if df_h.at[i, 'Tarea'] == '1']
                 if t2_c: cand = t2_c[0]
-                elif t1_c and len(t1_c) > 1: cand = t1_c[0]
+                elif t1_c: cand = t1_c[0]
                 if cand is not None:
                     df_h.at[cand, 'Tarea'] = f"Cubrir {target_zone_name}"
                     filled = True
@@ -531,7 +511,7 @@ def make_excel(df, start_d, end_d, title_prefix="Plan"):
     col = 2
     d_map = {}
     
-    ws.write(2, 0, "DOTACIÓN AGENTES", f_header_count)
+    ws.write(2, 0, "DOTACIÓN AGENTES (T1/3/4)", f_header_count)
     ws.write(3, 0, "DOTACIÓN COORDINADORES", f_header_count)
     ws.write(4, 0, "DOTACIÓN ANFITRIONES", f_header_count)
     ws.write(5, 0, "TOTAL HHEE REQUERIDAS", f_header_hhee)
@@ -638,6 +618,7 @@ def make_excel(df, start_d, end_d, title_prefix="Plan"):
     
     df_res = df[df['Fecha'].apply(lambda x: start_d <= x.date() <= end_d)].copy()
     
+    # 1. Resumen Ejecutivos por Counter (HORAS)
     ws_res.write(0, 0, "TOTAL HORAS POR COUNTER (EJECUTIVOS)", f_bold)
     ag_work = df_res[
         (df_res['Rol'] == 'Agente') & 
@@ -654,6 +635,7 @@ def make_excel(df, start_d, end_d, title_prefix="Plan"):
         for i, val in enumerate(row_data): ws_res.write(r_idx, i+1, val)
         r_idx += 1
         
+    # 2. Resumen HHEE
     r_idx += 2
     ws_res.write(r_idx, 0, "ESTADÍSTICAS HHEE (HORAS TOTALES)", f_bold)
     r_idx += 2
@@ -703,14 +685,14 @@ def make_excel(df, start_d, end_d, title_prefix="Plan"):
     wb.close()
     return out
 
-# --- UI PRINCIPAL ---
+# --- UI LATERAL ---
 st.sidebar.markdown("---")
 st.sidebar.header("4. Operación")
 with st.sidebar.expander("Bitácora de Incidencias"):
     with st.form("form_incidencia"):
         i_tipo = st.selectbox("Tipo", ["Inasistencia", "Atraso", "Salida Anticipada"])
         
-        # Necesitamos nombres cargados
+        # Validar si uploaded_sheets tiene algo
         dummy_names = []
         if 'exec' in uploaded_sheets and start_d:
             f, s = uploaded_sheets['exec']
@@ -752,7 +734,7 @@ if st.session_state.incidencias:
         st.rerun()
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V38"):
+if st.sidebar.button("🚀 Generar Planificación V39"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -766,28 +748,16 @@ if st.sidebar.button("🚀 Generar Planificación V38"):
             
             if full.empty: st.error("Sin datos.")
             else:
-                # 1. Escenario Teórico (Sin incidencias)
-                # Hack temporal: guardar incidencias, limpiar, calcular, restaurar
+                # 1. Escenario Teórico
                 real_incidencias = st.session_state.incidencias
                 st.session_state.incidencias = []
                 final_teorico = logic_engine(full, agents_no_tica)
                 
-                # 2. Escenario Real (Con incidencias)
+                # 2. Escenario Real
                 st.session_state.incidencias = real_incidencias
                 final_real = logic_engine(full, agents_no_tica)
                 
-                # Generar Excel con 2 hojas
-                out = io.BytesIO()
-                wb = xlsxwriter.Workbook(out)
-                
-                # Usar la lógica de make_excel adaptada para escribir en sheets distintos
-                # Lamentablemente make_excel crea su propio wb. 
-                # Vamos a fusionar la lógica aquí o modificar make_excel para aceptar wb externo.
-                # Por simplicidad, descargamos EL REAL que es el operativo.
-                # O mejor: El usuario pidió "Mantener sábana maestra y real".
-                
-                # Generamos el Real (V38 Standard)
+                # Excel
                 excel_data = make_excel(final_real, start_d, end_d, "Operativa Real")
-                
                 st.success("¡Planificación Generada!")
-                st.download_button("📥 Descargar Sábana Operativa (V38)", excel_data, f"Planificacion_Operativa.xlsx")
+                st.download_button("📥 Descargar Sábana Operativa (V39)", excel_data, f"Planificacion_Operativa.xlsx")
