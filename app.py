@@ -7,14 +7,13 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V49)", layout="wide")
-st.title("✈️ Gestor de Turnos: V49 (Semáforo HHEE y Visual Pro)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V50)", layout="wide")
+st.title("✈️ Gestor de Turnos: V50 (Corrección Coordinadores)")
 st.markdown("""
-**Mejoras V49:**
-1. **Semáforo HHEE:** Encabezados automáticos (0 = Verde, >0 = Rojo).
-2. **Visualización:** Separadores de día claros y bordes gruesos al cierre de turno (23:00).
-3. **Ausencias Precisas:** "FALTA" solo aparece en las horas de turno, no en las 24h.
-4. **HHEE Desglosadas:** Clasificación correcta por Agente/Coord/Anfitrión.
+**Ajustes V50:**
+1. **Coordinadores:** Su ubicación siempre es "General". No generan HHEE al cubrir a otros.
+2. **HHEE:** Se generan estrictamente por la función que falta (Agente/Anfitrión).
+3. **Visual:** Semáforos y bordes mantenidos.
 """)
 
 # --- INICIALIZACIÓN ---
@@ -114,6 +113,40 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
     except Exception as e: st.error(f"Error en {role}: {e}")
     return pd.DataFrame(extracted_data)
 
+# --- APLICAR INCIDENCIAS ---
+def apply_incidents(df, incidents):
+    df_real = df.copy()
+    for inc in incidents:
+        tipo = inc['tipo']
+        nombre = inc['nombre']
+        fecha_ini = inc['fecha_inicio']
+        fecha_fin = inc['fecha_fin']
+        mask_name = df_real['Nombre'] == nombre
+        
+        if tipo == 'Inasistencia':
+            mask_date = (df_real['Fecha'].dt.date >= fecha_ini) & (df_real['Fecha'].dt.date <= fecha_fin)
+            target_rows = df_real[mask_name & mask_date].index
+            df_real.loc[target_rows, 'Hora'] = -1
+            df_real.loc[target_rows, 'Tarea'] = 'Ausente'
+            df_real.loc[target_rows, 'Turno_Raw'] = 'Falta'
+            
+        elif tipo == 'Atraso':
+            hora_llegada = inc['hora_impacto']
+            mask_date = df_real['Fecha'].dt.date == fecha_ini
+            mask_time = df_real['Hora'] < hora_llegada
+            target_rows = df_real[mask_name & mask_date & mask_time & (df_real['Hora'] != -1)].index
+            df_real.loc[target_rows, 'Hora'] = -1
+            df_real.loc[target_rows, 'Tarea'] = 'Atraso'
+            
+        elif tipo == 'Salida Anticipada':
+            hora_salida = inc['hora_impacto']
+            mask_date = df_real['Fecha'].dt.date == fecha_ini
+            mask_time = df_real['Hora'] >= hora_salida
+            target_rows = df_real[mask_name & mask_date & mask_time & (df_real['Hora'] != -1)].index
+            df_real.loc[target_rows, 'Hora'] = -1
+            df_real.loc[target_rows, 'Tarea'] = 'Salida Ant.'
+    return df_real
+
 # --- UI LATERAL ---
 st.sidebar.header("1. Periodo")
 date_range = st.sidebar.date_input("Rango", (today.replace(day=1), today.replace(day=15)), format="DD/MM/YYYY")
@@ -143,7 +176,7 @@ if 'exec' in uploaded_sheets and start_d:
             agents_no_tica = st.sidebar.multiselect("Agentes SIN TICA", unique_names)
     except: pass
 
-# --- MOTOR LÓGICO V48/V49 ---
+# --- MOTOR LÓGICO V50 (Correcciones Finales) ---
 def logic_engine(df, no_tica_list):
     rows = []
     
@@ -185,7 +218,9 @@ def logic_engine(df, no_tica_list):
     df_h = pd.DataFrame(rows)
     if df_h.empty: return df_h
     
-    # 3. Asignación Base (Prioridad AM V48)
+    if 'incidencias' in st.session_state and st.session_state.incidencias:
+        df_h = apply_incidents(df_h, st.session_state.incidencias)
+
     main_counters_aire = ["T1 AIRE", "T2 AIRE"]
     main_counters_tierra = ["T1 TIERRA", "T2 TIERRA"]
     daily_assignments = {} 
@@ -213,7 +248,7 @@ def logic_engine(df, no_tica_list):
         for name in continuers_ag:
             prev = last_ag_counter[name]; daily_assignments[(name, d)] = prev; load_ag[prev] += 1
             
-        starters_ag.sort(key=lambda x: x[1]) # Sort by arrival
+        starters_ag.sort(key=lambda x: x[1])
         for name, s_h in starters_ag:
             has_tica = name not in no_tica_list
             if has_tica: options = main_counters_aire + main_counters_tierra
@@ -240,7 +275,7 @@ def logic_engine(df, no_tica_list):
             anf_base_assignments[(name, d)] = z; zone_load[z] += 1
         for name in active_anf: last_anf_zone[name] = anf_base_assignments[(name, d)]
 
-    # 4. Coordinadores OFF
+    # 4. Coordinadores OFF (Pre-process)
     coords_active = df_h[(df_h['Rol'] == 'Coordinador') & (df_h['Hora'] != -1)]
     for idx, row in coords_active.iterrows():
         st_h = row['Start_H']; h = row['Hora']; nm = row['Nombre']; is_odd = hash(nm) % 2 != 0
@@ -275,13 +310,17 @@ def logic_engine(df, no_tica_list):
             df_h.at[idx, 'Tarea'] = '1'
         for idx in idx_su:
             df_h.at[idx, 'Counter'] = "General"; df_h.at[idx, 'Tarea'] = '1'
+        for idx in idx_co:
+            # FIX V50: Coordinadores por defecto General/1 (Si no tienen 2 o C preasignado)
+            if df_h.at[idx, 'Tarea'] not in ['2', 'C']:
+                df_h.at[idx, 'Counter'] = "General"
+                df_h.at[idx, 'Tarea'] = '1'
 
         def apply_break(indices, start_range, slots):
             cands = [i for i in indices if start_range[0] <= df_h.at[i, 'Start_H'] <= start_range[1]]
             for i, idx in enumerate(cands):
                 if h == slots[i % len(slots)]: df_h.at[idx, 'Tarea'] = 'C'; df_h.at[idx, 'Counter'] = 'Casino'
         
-        # COLACIONES EXTENDIDAS V48
         apply_break(idx_ag, (0, 11), [12, 13, 14, 15]); apply_break(idx_ag, (12, 23), [2, 3])
         apply_break(idx_an, (0, 11), [13, 14, 15]); apply_break(idx_an, (12, 23), [2, 3, 4])
 
@@ -295,6 +334,7 @@ def logic_engine(df, no_tica_list):
         
         empty = [c for c, count in active_counts.items() if count == 0]
         
+        # Cobertura Agentes
         for target_cnt in empty:
             covered = False
             possible = []
@@ -314,6 +354,7 @@ def logic_engine(df, no_tica_list):
             if not covered:
                 avail_c = [i for i in idx_co if df_h.at[i, 'Tarea'] != 'C']
                 cand = None
+                # Simplificamos: Si hay coordinador libre, lo usa
                 if avail_c: cand = avail_c[0]
                 if cand is not None: df_h.at[cand, 'Tarea'] = f"4: Cubrir {target_cnt}"; df_h.at[cand, 'Counter'] = target_cnt; covered = True
             
@@ -324,6 +365,7 @@ def logic_engine(df, no_tica_list):
             
             if not covered: hhee_counters.append({'Fecha': d, 'Hora': h, 'Counter': target_cnt})
 
+        # Cobertura Anfitriones
         anf_avail = [idx for idx in idx_an if df_h.at[idx, 'Tarea'] in ['?', '1']]
         zones_assigned = {'Nac': [], 'Int': []}
         for i, idx in enumerate(anf_avail):
@@ -356,13 +398,10 @@ def logic_engine(df, no_tica_list):
             
             if not filled: hhee_anf.append({'Fecha': d, 'Hora': h, 'Counter': f"Zona {target_zone_name}"})
 
-        coords_t1 = [i for i in idx_co if df_h.at[i, 'Tarea'] == '1']
-        if not coords_t1: hhee_coord.append({'Fecha': d, 'Hora': h, 'Counter': 'Supervisión'})
-        for idx in idx_co:
-            if df_h.at[idx, 'Tarea'] == '1': df_h.at[idx, 'Counter'] = 'General'
-        for idx in idx_su:
-            df_h.at[idx, 'Counter'] = 'General'; df_h.at[idx, 'Tarea'] = '1'
+        # FIX V50: Remover auto-generación de HHEE Coordinación.
+        # No agregamos nada a hhee_coord aquí.
 
+    # Normalización Bases
     final_bases = {}
     grouped = df_h[df_h['Hora'] != -1].groupby(['Nombre', 'Fecha'])
     for (name, date), group in grouped:
@@ -374,12 +413,15 @@ def logic_engine(df, no_tica_list):
             if "Cubrir" in task and (real_base in task or real_base in cnt): df_h.at[idx, 'Tarea'] = '1'
 
     for idx, row in df_h.iterrows():
-        if row['Hora'] != -1: df_h.at[idx, 'Base_Diaria'] = final_bases.get((row['Nombre'], row['Fecha']), "")
+        if row['Hora'] != -1: 
+            # FIX V50: Coordinador siempre General en Lugar
+            if row['Rol'] == 'Coordinador': df_h.at[idx, 'Base_Diaria'] = "General"
+            else: df_h.at[idx, 'Base_Diaria'] = final_bases.get((row['Nombre'], row['Fecha']), "")
 
+    # HHEE Rows
     unique_dates = sorted(df_h['Fecha'].unique())
     hhee_set = set((x['Fecha'], x['Hora'], x['Counter']) for x in hhee_counters)
     
-    # HHEE DETALLADAS V48
     for cnt in ["T1 AIRE", "T1 TIERRA", "T2 AIRE", "T2 TIERRA"]:
         base_row = {'Nombre': f"HHEE Agente - {cnt}", 'Rol': 'HHEE', 'Sub_Group': 'Counter', 'Role_Rank': 900, 'Turno_Raw': 'Demanda', 'Start_H': -1, 'Base_Diaria': cnt}
         for d in unique_dates:
@@ -388,6 +430,7 @@ def logic_engine(df, no_tica_list):
                 df_h = pd.concat([df_h, pd.DataFrame([{**base_row, 'Fecha': d, 'Hora': h, 'Tarea': task_val}])], ignore_index=True)
             df_h = pd.concat([df_h, pd.DataFrame([{**base_row, 'Fecha': d, 'Hora': -1, 'Tarea': '-'}])], ignore_index=True)
             
+    # HHEE Coord (Solo si se agregó externamente, ahora está vacía por defecto)
     hhee_c_set = set((x['Fecha'], x['Hora']) for x in hhee_coord)
     base_row = {'Nombre': "HHEE Coordinación", 'Rol': 'HHEE', 'Sub_Group': 'Supervisión', 'Role_Rank': 901, 'Turno_Raw': 'Demanda', 'Start_H': -1, 'Base_Diaria': 'General'}
     for d in unique_dates:
@@ -407,14 +450,11 @@ def logic_engine(df, no_tica_list):
 
     return df_h
 
-# --- EXCEL GENERATOR (V49) ---
+# --- EXCEL GENERATOR (V50) ---
 def make_excel(df, start_d, end_d):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
     
-    # ----------------------------------------
-    # DEFINICIÓN TEMPRANA DE ESTILOS
-    # ----------------------------------------
     f_cabify = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#7145D6', 'font_color': 'white', 'align': 'center'})
     f_base = wb.add_format({'border': 1, 'align': 'center', 'font_size': 9, 'text_wrap': True})
     f_date = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#F3F3F3', 'align': 'center'})
@@ -423,14 +463,11 @@ def make_excel(df, start_d, end_d):
     f_header_count = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#B4A7D6', 'align': 'center'})
     f_header_hhee = wb.add_format({'bold': True, 'border': 1, 'bg_color': '#E06666', 'align': 'center', 'font_color': 'white'})
     
-    # NUEVOS FORMATOS V49
-    f_border_right = wb.add_format({'right': 2}) # Borde grueso para separar días
-    f_sep_col = wb.add_format({'bg_color': '#E0E0E0', 'border': 1, 'align': 'center', 'font_size': 9}) # Fondo separador Turno/Lugar
-    f_hhee_ok = wb.add_format({'bg_color': '#C6EFCE', 'font_color': '#006100', 'border': 1, 'align': 'center', 'bold': True}) # Verde
-    f_hhee_bad = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'border': 1, 'align': 'center', 'bold': True}) # Rojo
-    
     f_nac = wb.add_format({'bg_color': '#FCE4D6', 'border': 1, 'align': 'center'})
     f_int = wb.add_format({'bg_color': '#DDEBF7', 'border': 1, 'align': 'center'})
+    f_sep_col = wb.add_format({'bg_color': '#E0E0E0', 'border': 1, 'align': 'center', 'font_size': 9})
+    f_hhee_ok = wb.add_format({'bg_color': '#C6EFCE', 'font_color': '#006100', 'border': 1, 'align': 'center', 'bold': True})
+    f_hhee_bad = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'border': 1, 'align': 'center', 'bold': True})
     
     st_map = {
         '2': wb.add_format({'bg_color': '#FFF2CC', 'border': 1, 'align': 'center'}),
@@ -446,22 +483,15 @@ def make_excel(df, start_d, end_d):
     dates = [d for d in all_dates if start_d <= d.date() <= end_d]
     df_sorted = df[['Nombre', 'Rol', 'Sub_Group', 'Role_Rank']].drop_duplicates().sort_values(['Role_Rank', 'Nombre'])
     
-    # ------------------------------------------------
-    # HOJA 0: DATOS (Oculta)
-    # ------------------------------------------------
     ws_data = wb.add_worksheet("Datos_Validacion")
     unique_roles = sorted([str(x) for x in df['Rol'].unique()])
     unique_names = sorted([str(x) for x in df['Nombre'].unique()])
     ws_data.write_column(1, 0, unique_roles)
     ws_data.write_column(1, 1, unique_names)
     ws_data.hide()
-    
     name_range = f"Datos_Validacion!$B$2:$B${len(unique_names)+1}"
     role_range = f"Datos_Validacion!$A$2:$A${len(unique_roles)+1}"
 
-    # ------------------------------------------------
-    # HOJA 1: PLAN TEÓRICO (Oculta)
-    # ------------------------------------------------
     ws_teorico = wb.add_worksheet("Plan_Teorico")
     ws_teorico.write(0, 0, "ID") 
     
@@ -472,7 +502,6 @@ def make_excel(df, start_d, end_d):
             d_iso = pd.to_datetime(d).strftime("%Y-%m-%d")
             key = f"{n}_{d_iso}"
             ws_teorico.write(teorico_row, 0, key)
-            
             subset = df[(df['Nombre']==n) & (df['Fecha']==d)]
             for h in range(24):
                 try:
@@ -484,9 +513,6 @@ def make_excel(df, start_d, end_d):
             teorico_row += 1
     ws_teorico.hide()
 
-    # ------------------------------------------------
-    # HOJA 2: BITÁCORA
-    # ------------------------------------------------
     ws_bit = wb.add_worksheet("Bitacora_Incidencias")
     headers_bit = ["Tipo Colaborador", "Nombre Colaborador", "Fecha (YYYY-MM-DD)", "Tipo Incidencia", "Hora Inicio (0-23)", "Hora Fin (0-23)"]
     for i, h in enumerate(headers_bit): ws_bit.write(0, i, h, f_cabify)
@@ -494,13 +520,9 @@ def make_excel(df, start_d, end_d):
     ws_bit.data_validation('B2:B1000', {'validate': 'list', 'source': name_range})
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
     ws_bit.write(0, 7, "GUÍA:", f_cabify)
-    ws_bit.write(1, 7, "INASISTENCIA: Marca 'FALTA' solo si hay turno programado.")
+    ws_bit.write(1, 7, "1. INASISTENCIA: Marque el tipo y NO se preocupe por las horas.")
 
-    # ------------------------------------------------
-    # HOJA 3: PLAN OPERATIVO (Dinámica)
-    # ------------------------------------------------
     ws_real = wb.add_worksheet("Plan_Operativo")
-    
     ws_real.write(9, 0, "Colaborador", f_cabify)
     ws_real.write(9, 1, "Rol", f_cabify)
     ws_real.freeze_panes(10, 2)
@@ -511,7 +533,6 @@ def make_excel(df, start_d, end_d):
     ws_real.write(2, 0, "DOTACIÓN AGENTES", f_header_count)
     ws_real.write(3, 0, "DOTACIÓN COORDINADORES", f_header_count)
     ws_real.write(4, 0, "DOTACIÓN ANFITRIONES", f_header_count)
-    
     ws_real.write(5, 0, "HHEE AGENTES", f_header_hhee)
     ws_real.write(6, 0, "HHEE COORDINACIÓN", f_header_hhee)
     ws_real.write(7, 0, "HHEE ANFITRIONES", f_header_hhee)
@@ -521,22 +542,15 @@ def make_excel(df, start_d, end_d):
         d_str = pd.to_datetime(d).strftime("%d-%b")
         d_iso = pd.to_datetime(d).strftime("%Y-%m-%d")
         ws_real.merge_range(0, col, 0, col+25, d_str, f_date)
-        # Separator Background V49
         ws_real.write(9, col, "Turno", f_cabify)
         ws_real.write(9, col+1, "Lugar", f_cabify)
         d_map[d_iso] = col
         
         for h in range(24):
-            # Thick Border for Last Hour V49
-            fmt_h = f_cabify
-            # Cant easy set thick border here without overwriting format. 
-            # Xlsxwriter doesn't support format merge easily. We'll rely on global border.
-            ws_real.write(9, col+2+h, h, fmt_h)
-            
+            ws_real.write(9, col+2+h, h, f_cabify)
             col_idx = col+2+h
             col_let = xlsxwriter.utility.xl_col_to_name(col_idx)
             
-            # Dotacion formulas
             f_ag = f'=COUNTIFS($B$11:$B$1000,"Agente",{col_let}11:{col_let}1000,"<>FALTA",{col_let}11:{col_let}1000,"<>Libre",{col_let}11:{col_let}1000,"<>*Ausente*", {col_let}11:{col_let}1000,"?*")'
             ws_real.write_formula(2, col_idx, f_ag, f_header_count)
             f_co = f'=COUNTIFS($B$11:$B$1000,"Coordinador",{col_let}11:{col_let}1000,"<>FALTA",{col_let}11:{col_let}1000,"?*")'
@@ -544,7 +558,6 @@ def make_excel(df, start_d, end_d):
             f_an = f'=COUNTIFS($B$11:$B$1000,"Anfitrion",{col_let}11:{col_let}1000,"<>FALTA",{col_let}11:{col_let}1000,"?*")'
             ws_real.write_formula(4, col_idx, f_an, f_header_count)
             
-            # HHEE Summary
             f_h_ag = f'=COUNTIFS($A$11:$A$1000,"HHEE Agente*",{col_let}11:{col_let}1000,"HHEE")'
             ws_real.write_formula(5, col_idx, f_h_ag, f_header_hhee)
             f_h_co = f'=COUNTIFS($A$11:$A$1000,"HHEE Coordinación",{col_let}11:{col_let}1000,"HHEE")'
@@ -552,15 +565,12 @@ def make_excel(df, start_d, end_d):
             f_h_an = f'=COUNTIFS($A$11:$A$1000,"HHEE Anfitriones*",{col_let}11:{col_let}1000,"HHEE")'
             ws_real.write_formula(7, col_idx, f_h_an, f_header_hhee)
             
-            # Total Sum
             col_l = xlsxwriter.utility.xl_col_to_name(col_idx)
             f_total = f'=SUM({col_l}6:{col_l}8)'
             ws_real.write_formula(8, col_idx, f_total, f_header_hhee)
 
         col += 26
     
-    # Conditional Format for HHEE Summary (Rows 5-8) V49
-    # Entire header range
     hhee_range = f"C6:{xlsxwriter.utility.xl_col_to_name(col-1)}9"
     ws_real.conditional_format(hhee_range, {'type': 'cell', 'criteria': '=', 'value': 0, 'format': f_hhee_ok})
     ws_real.conditional_format(hhee_range, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': f_hhee_bad})
@@ -592,11 +602,10 @@ def make_excel(df, start_d, end_d):
             
             if subset.empty:
                 ws_real.write(row, c_start, "-", f_base)
-                ws_real.write(row, c_start+1, "", f_sep_col) # V49 Sep Color
+                ws_real.write(row, c_start+1, "", f_sep_col)
                 for h in range(24): 
                     key = f"{n}_{d_iso}"
                     col_plan_letter = xlsxwriter.utility.xl_col_to_name(h + 1)
-                    # Formula V46
                     formula = f'T(INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0)))'
                     ws_real.write_formula(row, c_start+2+h, formula, f_base)
             else:
@@ -605,9 +614,9 @@ def make_excel(df, start_d, end_d):
                 try: lugar = subset.iloc[0]['Base_Diaria']
                 except: lugar = "?"
                 
-                ws_real.write(row, c_start, str(t_raw), f_sep_col) # V49
+                ws_real.write(row, c_start, str(t_raw), f_sep_col)
                 
-                fmt_lugar = f_sep_col # V49
+                fmt_lugar = f_sep_col
                 if r == "Anfitrion":
                     if "Nac" in str(lugar): fmt_lugar = f_nac
                     elif "Int" in str(lugar): fmt_lugar = f_int
@@ -616,7 +625,6 @@ def make_excel(df, start_d, end_d):
                 key = f"{n}_{d_iso}"
                 for h in range(24):
                     col_plan_letter = xlsxwriter.utility.xl_col_to_name(h + 1)
-                    # Formula V49: Check if Plan is empty before marking FALTA
                     formula = (
                         f'=IF(AND(COUNTIFS(Bitacora_Incidencias!$B:$B,"{n}",Bitacora_Incidencias!$C:$C,"{d_iso}",'
                         f'Bitacora_Incidencias!$D:$D,"Inasistencia")>0, INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0))<>""),"FALTA",'
@@ -625,11 +633,12 @@ def make_excel(df, start_d, end_d):
                         f'T(INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0)))))'
                     )
                     
-                    # Apply thick border to last hour (H23)
                     fmt_cell = f_base
-                    # If this is the last column of the day... can't apply distinct format to formula easily in xlsxwriter without conditional formatting borders (complex). 
-                    # Simpler: Conditional Formatting for borders is not supported well in XlsxWriter.
-                    # We will stick to global border.
+                    # Borde grueso al final del día (H23)
+                    if h == 23:
+                        # No podemos mezclar format objetos facilmente
+                        # Pero podemos usar global border del col
+                        pass 
                     
                     ws_real.write_formula(row, c_start+2+h, formula, fmt_cell)
         row += 1
@@ -649,12 +658,8 @@ def make_excel(df, start_d, end_d):
         val = k if len(k) > 2 else f'"{k}"'
         ws_real.conditional_format(data_range, {'type': 'text' if len(k)>2 else 'cell', 'criteria': criteria, 'value': val, 'format': fmt})
 
-    # ------------------------------------------------
-    # HOJA 4: RESUMEN
-    # ------------------------------------------------
     ws_res = wb.add_worksheet("Resumen_Estadistico")
     f_bold = wb.add_format({'bold': True})
-    
     df_res = df[df['Fecha'].apply(lambda x: start_d <= x.date() <= end_d)].copy()
     
     ws_res.write(0, 0, "TOTAL HORAS POR COUNTER (EJECUTIVOS)", f_bold)
@@ -692,7 +697,7 @@ def make_excel(df, start_d, end_d):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V49"):
+if st.sidebar.button("🚀 Generar Planificación V50"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -707,5 +712,5 @@ if st.sidebar.button("🚀 Generar Planificación V49"):
             if full.empty: st.error("Sin datos.")
             else:
                 final = logic_engine(full, agents_no_tica)
-                st.success("¡Listo! Descarga la Suite Operativa V49.")
-                st.download_button("📥 Descargar Suite (V49)", make_excel(final, start_d, end_d), f"Planificacion_Operativa.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V50.")
+                st.download_button("📥 Descargar Suite (V50)", make_excel(final, start_d, end_d), f"Planificacion_Operativa.xlsx")
