@@ -7,13 +7,13 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V60)", layout="wide")
-st.title("✈️ Gestor de Turnos: V60 (Motor Exclusivo Colaciones)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V61)", layout="wide")
+st.title("✈️ Gestor de Turnos: V61 (Cobertura Inteligente y Bases)")
 st.markdown("""
-**Paradigma V60:**
-1. **Cobertura de Colaciones:** Los flotantes SÓLO se mueven para cubrir a un agente Fijo que se va al Casino.
-2. **Memoria Nocturna:** Los agentes conservan su estatus (Fijo o Flotante) al cruzar la medianoche (Adiós Efecto Cenicienta).
-3. **Regla TICA:** Agentes sin TICA bloqueados SÓLO en T1 AIRE.
+**Ajustes V61:**
+1. **Flotantes Inteligentes:** Cubren prioritariamente su propio counter cuando el Agente Fijo sale a colación.
+2. **Anfitriones Reparados:** Mantienen sus ubicaciones estables (Zona Int/Nac) sin saturarse de "Tarea 3".
+3. **Visibilidad:** Se muestran explícitamente las acciones de "Cubrir" para entender el flujo del turno.
 """)
 
 # --- INICIALIZACIÓN ---
@@ -200,7 +200,7 @@ if 'exec' in uploaded_sheets and start_d:
                 init_counters[ag] = st.sidebar.selectbox(ag, ["T2 AIRE", "T2 TIERRA", "T1 AIRE", "T1 TIERRA"], key=f"init_{ag}")
     except: pass
 
-# --- MOTOR LÓGICO V60 ---
+# --- MOTOR LÓGICO V61 ---
 def logic_engine(df, no_tica_list, initial_counters):
     rows = []
     
@@ -219,7 +219,7 @@ def logic_engine(df, no_tica_list, initial_counters):
                 else: pm += 1
         agent_class[name] = "Nocturno" if pm > am else "Diurno"
 
-    # EXPANDIR TURNOS VINCULADOS A SU SHIFT DATE
+    # EXPANDIR TURNOS POR SHIFT DATE
     for _, r in df.iterrows():
         hours, start_h = parse_shift_time(r['Turno_Raw'])
         sub_group = "General"
@@ -239,7 +239,7 @@ def logic_engine(df, no_tica_list, initial_counters):
                 'Base_Diaria': '', 'Shift_Date': r['Fecha'] 
             })
         else:
-            shift_date = r['Fecha'] # La fecha en la que inició el turno
+            shift_date = r['Fecha'] 
             for h in hours:
                 current_date = r['Fecha']
                 if start_h >= 18 and h < 12: current_date = current_date + timedelta(days=1)
@@ -257,22 +257,21 @@ def logic_engine(df, no_tica_list, initial_counters):
     main_counters_tierra = ["T1 TIERRA", "T2 TIERRA"]
     pref_order = ["T2 AIRE", "T2 TIERRA", "T1 AIRE", "T1 TIERRA"] 
     
+    # Asignaciones maestras por Shift Date
     shift_assignments = {} 
     shift_status = {} # 1 = Fijo, 2 = Flotante
-    last_ag_counter = {}
+    anf_shift_assignments = {}
     
-    for nm, cnt in initial_counters.items():
-        last_ag_counter[nm] = cnt
-        
     sorted_shift_dates = sorted(df_h['Shift_Date'].unique())
     
-    # 1. ASIGNACIÓN MATRIZ POR SHIFT DATE (Solución Cenicienta)
+    # MATRIZ DE ASIGNACIÓN
     for s_d in sorted_shift_dates:
-        s_d_date = s_d.date() if isinstance(s_d, datetime) else s_d
-        is_prior_day = False
-        if start_d:
-            is_prior_day = (s_d_date == (start_d - timedelta(days=1)).date() if isinstance(start_d, datetime) else (start_d - timedelta(days=1)))
-        
+        try:
+            s_d_date = pd.to_datetime(s_d).date()
+            is_prior_day = (s_d_date == (start_d - timedelta(days=1)))
+        except:
+            is_prior_day = False
+            
         # --- AGENTES ---
         df_sd_ag = df_h[(df_h['Shift_Date'] == s_d) & (df_h['Rol'] == 'Agente') & (df_h['Hora'] != -1)]
         if not df_sd_ag.empty:
@@ -288,7 +287,7 @@ def logic_engine(df, no_tica_list, initial_counters):
             
             def assign_group_sd(starters_list, is_am):
                 fixed_assigned = set()
-                starters_list.sort(key=lambda x: x[1]) # Orden de llegada
+                starters_list.sort(key=lambda x: x[1]) 
                 
                 for name, sh in starters_list:
                     has_tica = name not in no_tica_list
@@ -301,54 +300,39 @@ def logic_engine(df, no_tica_list, initial_counters):
                         status = 1
                     else:
                         if len(fixed_assigned) < 4:
-                            prev = last_ag_counter.get(name)
-                            if prev and prev not in fixed_assigned and (has_tica or prev != "T1 AIRE"):
-                                assigned_c = prev
-                            
-                            if not assigned_c:
-                                for fc in ["T1 AIRE", "T1 TIERRA", "T2 AIRE", "T2 TIERRA"]:
-                                    if fc not in fixed_assigned:
-                                        if not has_tica and fc == "T1 AIRE": continue
-                                        assigned_c = fc
-                                        break
+                            for fc in ["T1 AIRE", "T1 TIERRA", "T2 AIRE", "T2 TIERRA"]:
+                                if fc not in fixed_assigned:
+                                    if not has_tica and fc == "T1 AIRE": continue
+                                    assigned_c = fc
+                                    break
                         
                         if assigned_c:
                             fixed_assigned.add(assigned_c)
-                            status = 1 # FIJO
+                            status = 1 
                         else:
-                            status = 2 # FLOTANTE
-                            prev = last_ag_counter.get(name)
-                            if prev and (has_tica or prev != "T1 AIRE"):
-                                assigned_c = prev
-                            else:
-                                valid_prefs = [c for c in pref_order if has_tica or c != "T1 AIRE"]
-                                valid_prefs.sort(key=lambda c: (load_ag.get(c, 0), pref_order.index(c)))
-                                assigned_c = valid_prefs[0]
+                            status = 2 
+                            valid_prefs = [c for c in pref_order if has_tica or c != "T1 AIRE"]
+                            valid_prefs.sort(key=lambda c: (load_ag.get(c, 0), pref_order.index(c)))
+                            assigned_c = valid_prefs[0]
                     
                     shift_assignments[(name, s_d)] = assigned_c
                     shift_status[(name, s_d)] = status
-                    last_ag_counter[name] = assigned_c
                     load_ag[assigned_c] = load_ag.get(assigned_c, 0) + 1
                     
             assign_group_sd(am_starters, True)
             assign_group_sd(pm_starters, False)
 
         # --- ANFITRIONES ---
-        anf_shift_assignments = {}
-        last_anf_zone = {}
         df_sd_anf = df_h[(df_h['Shift_Date'] == s_d) & (df_h['Rol'] == 'Anfitrion') & (df_h['Hora'] != -1)]
         if not df_sd_anf.empty:
             active_anf_names = df_sd_anf['Nombre'].unique()
             zone_load = {'Zona Int': 0, 'Zona Nac': 0}
             for name in sorted(active_anf_names):
-                prev = last_anf_zone.get(name)
-                if prev: z = prev
-                else: z = 'Zona Int' if zone_load['Zona Int'] <= zone_load['Zona Nac'] else 'Zona Nac'
+                z = 'Zona Int' if zone_load['Zona Int'] <= zone_load['Zona Nac'] else 'Zona Nac'
                 anf_shift_assignments[(name, s_d)] = z
-                last_anf_zone[name] = z
                 zone_load[z] += 1
 
-    # --- COORDINADORES (Base General) ---
+    # --- COORDINADORES ---
     coords_active = df_h[(df_h['Rol'] == 'Coordinador') & (df_h['Hora'] != -1)]
     for idx, row in coords_active.iterrows():
         st_h = row['Start_H']; h = row['Hora']; nm = row['Nombre']; is_odd = hash(nm) % 2 != 0
@@ -368,7 +352,7 @@ def logic_engine(df, no_tica_list, initial_counters):
 
     hhee_counters = []; hhee_coord = []; hhee_anf = []
 
-    # 5. PROCESO HORA A HORA (COBERTURA EXCLUSIVA V60)
+    # 5. PROCESO HORA A HORA (COBERTURA INTELIGENTE)
     for (d, h), g in df_h[df_h['Hora'] != -1].groupby(['Fecha', 'Hora']):
         idx_ag = g[g['Rol']=='Agente'].index.tolist()
         idx_co = g[g['Rol']=='Coordinador'].index.tolist()
@@ -427,15 +411,12 @@ def logic_engine(df, no_tica_list, initial_counters):
             if len(c_t1) > 1: return c_t1[0]
             return None
 
-        # ==========================================
-        # NUEVO MOTOR: SOLO CUBRIR FIJOS EN COLACIÓN
-        # ==========================================
+        # --- MOTOR DE COBERTURA AGENTES V61 ---
         fixed_breaks_to_cover = []
         for idx in idx_ag:
             name = df_h.at[idx, 'Nombre']
             s_d = df_h.at[idx, 'Shift_Date']
             status = shift_status.get((name, s_d), 2)
-            # Solo si el FIJO se fue al casino, necesitamos cobertura obligatoria
             if status == 1 and df_h.at[idx, 'Tarea'] == 'C':
                 target_cnt = shift_assignments.get((name, s_d))
                 fixed_breaks_to_cover.append(target_cnt)
@@ -445,23 +426,30 @@ def logic_engine(df, no_tica_list, initial_counters):
             name = df_h.at[idx, 'Nombre']
             s_d = df_h.at[idx, 'Shift_Date']
             status = shift_status.get((name, s_d), 2)
-            # Solo los FLOTANTES libres pueden cubrir
             if status == 2 and df_h.at[idx, 'Tarea'] == '1':
                 available_flotantes.append(idx)
                 
         for target_cnt in fixed_breaks_to_cover:
             covered = False
             
-            # Buscar Flotante
+            # Priorizar Flotantes (Mismo Counter > Otros)
+            valid_flotantes = []
             for d_idx in available_flotantes:
                 d_nm = df_h.at[d_idx, 'Nombre']
                 if target_cnt == "T1 AIRE" and (d_nm in no_tica_list): continue
                 
-                df_h.at[d_idx, 'Tarea'] = f"3: Cubrir {target_cnt}"
-                df_h.at[d_idx, 'Counter'] = target_cnt
-                available_flotantes.remove(d_idx)
+                d_base = shift_assignments.get((d_nm, df_h.at[d_idx, 'Shift_Date']))
+                weight = 0 if d_base == target_cnt else 1
+                valid_flotantes.append((weight, d_idx))
+                
+            valid_flotantes.sort(key=lambda x: x[0])
+            
+            if valid_flotantes:
+                best_idx = valid_flotantes[0][1]
+                df_h.at[best_idx, 'Tarea'] = f"3: Cubrir {target_cnt}"
+                df_h.at[best_idx, 'Counter'] = target_cnt
+                available_flotantes.remove(best_idx)
                 covered = True
-                break
                 
             # Buscar Coordinador
             if not covered:
@@ -471,11 +459,11 @@ def logic_engine(df, no_tica_list, initial_counters):
                     df_h.at[cand, 'Counter'] = target_cnt
                     covered = True
                     
-            # HHEE
+            # Si nadie puede tapar -> HHEE
             if not covered:
                 hhee_counters.append({'Fecha': d, 'Hora': h, 'Counter': target_cnt})
 
-        # Cobertura Anfitriones
+        # --- MOTOR COBERTURA ANFITRIONES V61 ---
         anf_avail = [idx for idx in idx_an if df_h.at[idx, 'Tarea'] in ['?', '1']]
         zones_assigned = {'Nac': [], 'Int': []}
         for i, idx in enumerate(anf_avail):
@@ -502,7 +490,7 @@ def logic_engine(df, no_tica_list, initial_counters):
             
             if not filled: hhee_anf.append({'Fecha': d, 'Hora': h, 'Counter': f"Zona {target_zone_name}"})
 
-    # Guardar bases para la vista de Resumen
+    # Asignación final de Bases Diarias para Reporte
     for idx, row in df_h.iterrows():
         if row['Hora'] != -1: 
             if row['Rol'] == 'Coordinador': 
@@ -546,7 +534,7 @@ def logic_engine(df, no_tica_list, initial_counters):
 
     return df_h, raw_shifts_map
 
-# --- EXCEL GENERATOR (V60) ---
+# --- EXCEL GENERATOR (V61) ---
 def make_excel(df, raw_shifts_map, start_d, end_d):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
@@ -584,6 +572,9 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     df_staff_sorted = df_staff[['Nombre', 'Rol', 'Sub_Group', 'Role_Rank']].drop_duplicates().sort_values(['Role_Rank', 'Nombre'])
     df_hhee_sorted = df_hhee[['Nombre', 'Rol', 'Sub_Group', 'Role_Rank']].drop_duplicates().sort_values(['Nombre'])
     
+    # ------------------------------------------------
+    # HOJAS OCULTAS
+    # ------------------------------------------------
     ws_data = wb.add_worksheet("Datos_Validacion")
     unique_roles = sorted([str(x) for x in df['Rol'].unique() if x != 'HHEE'])
     unique_names = sorted([str(x) for x in df['Nombre'].unique() if 'HHEE' not in str(x)])
@@ -625,15 +616,21 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     ws_teorico.hide()
     ws_shiftdate.hide()
 
+    # ------------------------------------------------
+    # HOJA 2: BITÁCORA
+    # ------------------------------------------------
     ws_bit = wb.add_worksheet("Bitacora_Incidencias")
     headers_bit = ["Tipo Colaborador", "Nombre Colaborador", "Fecha (YYYY-MM-DD)", "Tipo Incidencia", "Hora Inicio (0-23)", "Hora Fin (0-23)"]
     for i, h in enumerate(headers_bit): ws_bit.write(0, i, h, f_cabify)
     ws_bit.data_validation('A2:A1000', {'validate': 'list', 'source': role_range})
     ws_bit.data_validation('B2:B1000', {'validate': 'list', 'source': name_range})
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
-    ws_bit.write(0, 7, "GUÍA OPERATIVA V60:", f_cabify)
+    ws_bit.write(0, 7, "GUÍA OPERATIVA V61:", f_cabify)
     ws_bit.write(1, 7, "INASISTENCIA: Marque el día de inicio del turno. Borrará automáticamente la madrugada siguiente.")
 
+    # ------------------------------------------------
+    # HOJA 3: PLAN OPERATIVO
+    # ------------------------------------------------
     ws_real = wb.add_worksheet("Plan_Operativo")
     ws_real.write(9, 0, "Colaborador", f_cabify)
     ws_real.write(9, 1, "Rol", f_cabify)
@@ -840,7 +837,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V60"):
+if st.sidebar.button("🚀 Generar Planificación V61"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -855,5 +852,5 @@ if st.sidebar.button("🚀 Generar Planificación V60"):
             if full.empty: st.error("Sin datos.")
             else:
                 final, raw_map = logic_engine(full, agents_no_tica, init_counters)
-                st.success("¡Listo! Descarga la Suite Operativa V60.")
-                st.download_button("📥 Descargar Suite (V60)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V61.")
+                st.download_button("📥 Descargar Suite (V61)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa.xlsx")
