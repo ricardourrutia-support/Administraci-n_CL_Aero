@@ -7,13 +7,13 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V68)", layout="wide")
-st.title("✈️ Gestor de Turnos: V68 (Corrección Fórmulas HHEE)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V69)", layout="wide")
+st.title("✈️ Gestor de Turnos: V69 (Blindaje Operativo)")
 st.markdown("""
-**Optimizaciones V68:**
-1. **Contadores Reparados:** Se solucionó el error `#VALUE!` en los encabezados de HHEE.
-2. **Conteo Inteligente:** El encabezado ahora cuenta correctamente tanto las HHEE en estado "REQ" como las que ya fueron asignadas a un nombre.
-3. **Control Manual Mantenido:** Puedes seguir usando los combobox para alterar turnos y asignar HHEE libremente.
+**Optimizaciones V69:**
+1. **Regla Coordinador:** Nunca se moverán a cubrir si eso implica dejar la Tarea 1 (Supervisión) en 0.
+2. **HHEE Anfitriones:** Garantía de mínimo 1 persona por zona; si no hay nadie en ninguna, detona HHEE.
+3. **Supervisores Visibles:** Se agregó un contador total de horas para Supervisores y Coordinadores en el Resumen.
 """)
 
 # --- INICIALIZACIÓN ---
@@ -397,11 +397,17 @@ def logic_engine(df, no_tica_list, initial_counters):
                 if h == slots[i % len(slots)]: df_h.at[idx, 'Tarea'] = 'C'; df_h.at[idx, 'Counter'] = 'Casino'
         apply_break_anf(idx_an, (0, 11), [13, 14, 15]); apply_break_anf(idx_an, (12, 23), [2, 3, 4])
 
+        # V69: NUEVA LÓGICA DE COORDINADOR (Protección Tarea 1)
         def find_coord_cover():
-            c_t2 = [i for i in idx_co if df_h.at[i, 'Tarea'] == '2']
-            c_t1 = [i for i in idx_co if df_h.at[i, 'Tarea'] == '1']
-            if c_t2: return c_t2[0]
-            if len(c_t1) > 1: return c_t1[0]
+            c_t1 = [i for i in idx_co if str(df_h.at[i, 'Tarea']) == '1']
+            c_t2 = [i for i in idx_co if str(df_h.at[i, 'Tarea']) == '2']
+            
+            # Solo usa un T2 si al menos hay alguien en T1 operando
+            if len(c_t1) >= 1 and len(c_t2) > 0:
+                return c_t2[0]
+            # Solo usa un T1 si hay MÁS de 1 en T1 (para nunca dejar T1 en cero)
+            if len(c_t1) > 1:
+                return c_t1[0]
             return None
 
         needs_coverage = []
@@ -469,18 +475,20 @@ def logic_engine(df, no_tica_list, initial_counters):
             if not covered:
                 hhee_counters.append({'Fecha': d, 'Hora': h, 'Counter': target_cnt})
 
+        # V69: CORRECCIÓN HHEE ANFITRIONES (Cuando ambas zonas caen a 0)
         active_nac = sum(1 for idx in idx_an if df_h.at[idx, 'Tarea'] == '1' and df_h.at[idx, 'Counter'] == 'Zona Nac')
         active_int = sum(1 for idx in idx_an if df_h.at[idx, 'Tarea'] == '1' and df_h.at[idx, 'Counter'] == 'Zona Int')
         
         target_zs = []
-        if active_nac == 0 and active_int > 0: target_zs.append('Zona Nac')
-        elif active_int == 0 and active_nac > 0: target_zs.append('Zona Int')
+        if active_nac == 0: target_zs.append('Zona Nac')
+        if active_int == 0: target_zs.append('Zona Int')
         
         for tz in target_zs:
             covered = False
             other_z = 'Zona Int' if tz == 'Zona Nac' else 'Zona Nac'
             active_other = sum(1 for idx in idx_an if df_h.at[idx, 'Tarea'] == '1' and df_h.at[idx, 'Counter'] == other_z)
             
+            # Solo pide a un compañero si el otro lado tiene a más de 1
             if active_other > 1:
                 for a_idx in idx_an:
                     if df_h.at[a_idx, 'Tarea'] == '1' and df_h.at[a_idx, 'Counter'] == other_z:
@@ -572,7 +580,7 @@ def logic_engine(df, no_tica_list, initial_counters):
 
     return df_h, raw_shifts_map, eligible_hhee
 
-# --- EXCEL GENERATOR (V68) ---
+# --- EXCEL GENERATOR (V69) ---
 def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
@@ -676,7 +684,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     ws_bit.data_validation('A2:A1000', {'validate': 'list', 'source': role_range})
     ws_bit.data_validation('B2:B1000', {'validate': 'list', 'source': name_range})
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
-    ws_bit.write(0, 7, "GUÍA OPERATIVA V68:", f_cabify)
+    ws_bit.write(0, 7, "GUÍA OPERATIVA V69:", f_cabify)
     ws_bit.write(1, 7, "INASISTENCIA: Marque el día de inicio del turno. Borrará automáticamente la madrugada siguiente.")
 
     ws_real = wb.add_worksheet("Plan_Operativo")
@@ -722,7 +730,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
             f_an = f'=COUNTIFS($B$11:$B$1000,"Anfitrion",{col_let}11:{col_let}1000,"<>FALTA",{col_let}11:{col_let}1000,"?*")'
             ws_real.write_formula(4, col_idx, f_an, f_header_count)
             
-            # V68: CORRECCIÓN FÓRMULA HHEE PARA EVITAR #VALUE!
             f_h_ag = f'=COUNTIFS($A$11:$A$1000,"HHEE Agente*",{col_let}11:{col_let}1000,"?*")'
             ws_real.write_formula(5, col_idx, f_h_ag, f_header_hhee)
             f_h_co = f'=COUNTIFS($A$11:$A$1000,"HHEE Coordinación",{col_let}11:{col_let}1000,"?*")'
@@ -856,13 +863,14 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     ws_real.conditional_format(hhee_box_range, {'type': 'formula', 'criteria': f'=AND(D{hhee_start_row+1}<>"", D{hhee_start_row+1}<>"REQ")', 'format': f_hhee_ok})
 
     # ------------------------------------------------
-    # HOJA 4: RESUMEN
+    # HOJA 4: RESUMEN V69
     # ------------------------------------------------
     ws_res = wb.add_worksheet("Resumen_Estadistico")
     f_bold = wb.add_format({'bold': True})
     
     df_res = df[df['Fecha'].apply(lambda x: start_d <= x.date() <= end_d)].copy()
     
+    # TABLA 1: HORAS DE EJECUTIVOS
     ws_res.write(0, 0, "TOTAL HORAS POR COUNTER (EJECUTIVOS)", f_bold)
     ag_work = df_res[(df_res['Rol'] == 'Agente') & (df_res['Tarea'].astype(str).str.contains(r'^(1|3|4|Cubrir|Apoyo)', regex=True))]
     if not ag_work.empty:
@@ -877,6 +885,24 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
             r_idx += 1
     else: r_idx = 5
 
+    # TABLA 2: HORAS DE SUPERVISORES Y OTROS ROLES (V69 NUEVO)
+    r_idx += 2
+    ws_res.write(r_idx, 0, "HORAS TRABAJADAS (OTROS ROLES)", f_bold)
+    r_idx += 1
+    other_work = df_res[(df_res['Rol'].isin(['Anfitrion', 'Coordinador', 'Supervisor'])) & (df_res['Hora'] != -1) & (~df_res['Tarea'].astype(str).str.contains('Ausente|Falta', na=False, case=False))]
+    if not other_work.empty:
+        totals = other_work.groupby(['Rol', 'Nombre']).size().reset_index(name='Horas')
+        ws_res.write(r_idx, 0, "Rol", f_bold)
+        ws_res.write(r_idx, 1, "Nombre", f_bold)
+        ws_res.write(r_idx, 2, "Horas Totales (Inc. Colación)", f_bold)
+        r_idx += 1
+        for _, row_data in totals.iterrows():
+            ws_res.write(r_idx, 0, row_data['Rol'])
+            ws_res.write(r_idx, 1, row_data['Nombre'])
+            ws_res.write(r_idx, 2, row_data['Horas'])
+            r_idx += 1
+
+    # TABLA 3: ESTADÍSTICA DE HHEE
     r_idx += 2
     ws_res.write(r_idx, 0, "ESTADÍSTICAS HHEE (REQUERIDAS POR SISTEMA)", f_bold)
     r_idx += 2
@@ -902,7 +928,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V68"):
+if st.sidebar.button("🚀 Generar Planificación V69"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -917,5 +943,5 @@ if st.sidebar.button("🚀 Generar Planificación V68"):
             if full.empty: st.error("Sin datos válidos (revise el formato del Excel o las fechas).")
             else:
                 final, raw_map, el_hhee = logic_engine(full, agents_no_tica, init_counters)
-                st.success("¡Listo! Descarga la Suite Operativa V68.")
-                st.download_button("📥 Descargar Suite (V68)", make_excel(final, raw_map, start_d, end_d, el_hhee), f"Planificacion_Operativa.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V69.")
+                st.download_button("📥 Descargar Suite (V69)", make_excel(final, raw_map, start_d, end_d, el_hhee), f"Planificacion_Operativa.xlsx")
