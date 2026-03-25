@@ -7,14 +7,13 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V67)", layout="wide")
-st.title("✈️ Gestor de Turnos: V67 (Control Manual y HHEE)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V68)", layout="wide")
+st.title("✈️ Gestor de Turnos: V68 (Corrección Fórmulas HHEE)")
 st.markdown("""
-**Nuevas Funciones V67:**
-1. **Control Manual:** Modifique libremente cualquier asignación usando los menús desplegables (Combobox) en las celdas.
-2. **HHEE Inteligentes:** Asigne nombres a las HHEE. El menú solo sugerirá a quienes acaban de terminar su turno y a los Supervisores.
-3. **Supervisores en Grilla:** Ahora son visibles y pueden tomar HHEE.
-4. **Estadística Real:** Las HHEE asignadas manualmente se suman automáticamente en la hoja de Resumen.
+**Optimizaciones V68:**
+1. **Contadores Reparados:** Se solucionó el error `#VALUE!` en los encabezados de HHEE.
+2. **Conteo Inteligente:** El encabezado ahora cuenta correctamente tanto las HHEE en estado "REQ" como las que ya fueron asignadas a un nombre.
+3. **Control Manual Mantenido:** Puedes seguir usando los combobox para alterar turnos y asignar HHEE libremente.
 """)
 
 # --- INICIALIZACIÓN ---
@@ -201,7 +200,7 @@ if 'exec' in uploaded_sheets and start_d:
                 init_counters[ag] = st.sidebar.selectbox(ag, ["T2 AIRE", "T2 TIERRA", "T1 AIRE", "T1 TIERRA"], key=f"init_{ag}")
     except: pass
 
-# --- MOTOR LÓGICO V66/67 ---
+# --- MOTOR LÓGICO ---
 def logic_engine(df, no_tica_list, initial_counters):
     rows = []
     raw_shifts_map = {}
@@ -573,7 +572,7 @@ def logic_engine(df, no_tica_list, initial_counters):
 
     return df_h, raw_shifts_map, eligible_hhee
 
-# --- EXCEL GENERATOR (V67) ---
+# --- EXCEL GENERATOR (V68) ---
 def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
@@ -590,7 +589,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     f_int = wb.add_format({'bg_color': '#DDEBF7', 'border': 1, 'align': 'center'})
     f_sep_col = wb.add_format({'bg_color': '#1C1C1C', 'border': 1, 'align': 'center'}) 
     
-    # FORMATOS HHEE CORREGIDOS EN V67
     f_hhee_req = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'border': 1, 'align': 'center', 'bold': True})
     f_hhee_bad = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'border': 1, 'align': 'center', 'bold': True})
     f_hhee_ok = wb.add_format({'bg_color': '#C6EFCE', 'font_color': '#006100', 'border': 1, 'align': 'center', 'bold': True})
@@ -678,7 +676,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     ws_bit.data_validation('A2:A1000', {'validate': 'list', 'source': role_range})
     ws_bit.data_validation('B2:B1000', {'validate': 'list', 'source': name_range})
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
-    ws_bit.write(0, 7, "GUÍA OPERATIVA V67:", f_cabify)
+    ws_bit.write(0, 7, "GUÍA OPERATIVA V68:", f_cabify)
     ws_bit.write(1, 7, "INASISTENCIA: Marque el día de inicio del turno. Borrará automáticamente la madrugada siguiente.")
 
     ws_real = wb.add_worksheet("Plan_Operativo")
@@ -724,11 +722,12 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
             f_an = f'=COUNTIFS($B$11:$B$1000,"Anfitrion",{col_let}11:{col_let}1000,"<>FALTA",{col_let}11:{col_let}1000,"?*")'
             ws_real.write_formula(4, col_idx, f_an, f_header_count)
             
-            f_h_ag = f'=COUNTIFS($A$11:$A$1000,"HHEE Agente*",Plan_Teorico!{col_let}11:{col_let}1000,"REQ")'
+            # V68: CORRECCIÓN FÓRMULA HHEE PARA EVITAR #VALUE!
+            f_h_ag = f'=COUNTIFS($A$11:$A$1000,"HHEE Agente*",{col_let}11:{col_let}1000,"?*")'
             ws_real.write_formula(5, col_idx, f_h_ag, f_header_hhee)
-            f_h_co = f'=COUNTIFS($A$11:$A$1000,"HHEE Coordinación",Plan_Teorico!{col_let}11:{col_let}1000,"REQ")'
+            f_h_co = f'=COUNTIFS($A$11:$A$1000,"HHEE Coordinación",{col_let}11:{col_let}1000,"?*")'
             ws_real.write_formula(6, col_idx, f_h_co, f_header_hhee)
-            f_h_an = f'=COUNTIFS($A$11:$A$1000,"HHEE Anfitriones*",Plan_Teorico!{col_let}11:{col_let}1000,"REQ")'
+            f_h_an = f'=COUNTIFS($A$11:$A$1000,"HHEE Anfitriones*",{col_let}11:{col_let}1000,"?*")'
             ws_real.write_formula(7, col_idx, f_h_an, f_header_hhee)
             
             f_total = f'=SUM({col_let}6:{col_let}8)'
@@ -738,7 +737,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     
     hhee_tot_range = f"D9:{xlsxwriter.utility.xl_col_to_name(col-1)}9"
     ws_real.conditional_format(hhee_tot_range, {'type': 'cell', 'criteria': '=', 'value': 0, 'format': f_hhee_ok})
-    # LÍNEA CORREGIDA V67
     ws_real.conditional_format(hhee_tot_range, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': f_hhee_bad})
 
     row = 10
@@ -904,7 +902,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V67"):
+if st.sidebar.button("🚀 Generar Planificación V68"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -919,5 +917,5 @@ if st.sidebar.button("🚀 Generar Planificación V67"):
             if full.empty: st.error("Sin datos válidos (revise el formato del Excel o las fechas).")
             else:
                 final, raw_map, el_hhee = logic_engine(full, agents_no_tica, init_counters)
-                st.success("¡Listo! Descarga la Suite Operativa V67.")
-                st.download_button("📥 Descargar Suite (V67)", make_excel(final, raw_map, start_d, end_d, el_hhee), f"Planificacion_Operativa.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V68.")
+                st.download_button("📥 Descargar Suite (V68)", make_excel(final, raw_map, start_d, end_d, el_hhee), f"Planificacion_Operativa.xlsx")
