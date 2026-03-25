@@ -7,10 +7,10 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V66)", layout="wide")
-st.title("✈️ Gestor de Turnos: V66 (Control Manual y HHEE)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V67)", layout="wide")
+st.title("✈️ Gestor de Turnos: V67 (Control Manual y HHEE)")
 st.markdown("""
-**Nuevas Funciones V66:**
+**Nuevas Funciones V67:**
 1. **Control Manual:** Modifique libremente cualquier asignación usando los menús desplegables (Combobox) en las celdas.
 2. **HHEE Inteligentes:** Asigne nombres a las HHEE. El menú solo sugerirá a quienes acaban de terminar su turno y a los Supervisores.
 3. **Supervisores en Grilla:** Ahora son visibles y pueden tomar HHEE.
@@ -201,7 +201,7 @@ if 'exec' in uploaded_sheets and start_d:
                 init_counters[ag] = st.sidebar.selectbox(ag, ["T2 AIRE", "T2 TIERRA", "T1 AIRE", "T1 TIERRA"], key=f"init_{ag}")
     except: pass
 
-# --- MOTOR LÓGICO V66 ---
+# --- MOTOR LÓGICO V66/67 ---
 def logic_engine(df, no_tica_list, initial_counters):
     rows = []
     raw_shifts_map = {}
@@ -229,7 +229,7 @@ def logic_engine(df, no_tica_list, initial_counters):
             role_rank = 10 if cat == "Diurno" else 11
         elif r['Rol'] == 'Coordinador': role_rank = 20
         elif r['Rol'] == 'Anfitrion': role_rank = 30
-        elif r['Rol'] == 'Supervisor': role_rank = 40 # SUPERVISORES INCLUIDOS
+        elif r['Rol'] == 'Supervisor': role_rank = 40 
             
         if not hours:
             rows.append({
@@ -250,14 +250,14 @@ def logic_engine(df, no_tica_list, initial_counters):
                 })
     
     df_h = pd.DataFrame(rows)
-    if df_h.empty: return df_h, raw_shifts_map
+    if df_h.empty: return df_h, raw_shifts_map, {}
 
     main_counters_aire = ["T1 AIRE", "T2 AIRE"]
     main_counters_tierra = ["T1 TIERRA", "T2 TIERRA"]
     pref_order = ["T2 AIRE", "T2 TIERRA", "T1 AIRE", "T1 TIERRA"] 
     
     shift_assignments = {} 
-    shift_status = {} # 1 = Fijo, 2 = Flotante
+    shift_status = {} 
     anf_shift_assignments = {}
     last_ag_counter = {}
     
@@ -266,7 +266,6 @@ def logic_engine(df, no_tica_list, initial_counters):
         
     sorted_shift_dates = sorted(df_h['Shift_Date'].unique())
     
-    # 1. ASIGNACIÓN INICIAL POR SHIFT DATE
     for s_d in sorted_shift_dates:
         try:
             s_d_date = pd.to_datetime(s_d).date()
@@ -294,7 +293,7 @@ def logic_engine(df, no_tica_list, initial_counters):
                 for name, sh in starters_list:
                     has_tica = name not in no_tica_list
                     assigned_c = None
-                    status = 2 # Flotante
+                    status = 2 
                     
                     if is_prior_day and not is_am and name in initial_counters:
                         assigned_c = initial_counters[name]
@@ -360,7 +359,6 @@ def logic_engine(df, no_tica_list, initial_counters):
 
     hhee_counters = []; hhee_coord = []; hhee_anf = []
 
-    # 2. SIMULACIÓN HORA A HORA
     for (d, h), g in df_h[df_h['Hora'] != -1].groupby(['Fecha', 'Hora']):
         idx_ag = g[g['Rol']=='Agente'].index.tolist()
         idx_co = g[g['Rol']=='Coordinador'].index.tolist()
@@ -377,7 +375,6 @@ def logic_engine(df, no_tica_list, initial_counters):
             if df_h.at[idx, 'Tarea'] not in ['2', 'C']:
                 df_h.at[idx, 'Counter'] = "General"; df_h.at[idx, 'Tarea'] = '1'
 
-        # COLACIONES AGENTES
         for idx in idx_ag:
             sh = df_h.at[idx, 'Start_H']
             break_h = -1
@@ -395,7 +392,6 @@ def logic_engine(df, no_tica_list, initial_counters):
             if h == break_h:
                 df_h.at[idx, 'Tarea'] = 'C'; df_h.at[idx, 'Counter'] = 'Casino'
                 
-        # COLACIONES ANFITRIONES
         def apply_break_anf(indices, start_range, slots):
             cands = [i for i in indices if start_range[0] <= df_h.at[i, 'Start_H'] <= start_range[1]]
             for i, idx in enumerate(cands):
@@ -409,9 +405,7 @@ def logic_engine(df, no_tica_list, initial_counters):
             if len(c_t1) > 1: return c_t1[0]
             return None
 
-        # --- MOTOR COBERTURA AGENTES V66 (EXCLUSIVO COLACIONES Y MÍNIMOS) ---
         needs_coverage = []
-        # Fijos en Colación
         for idx in idx_ag:
             nm = df_h.at[idx, 'Nombre']
             sd = df_h.at[idx, 'Shift_Date']
@@ -420,7 +414,6 @@ def logic_engine(df, no_tica_list, initial_counters):
                 target_cnt = shift_assignments.get((nm, sd))
                 needs_coverage.append(target_cnt)
 
-        # Mínimos operativos (Si nadie está asignado al counter)
         active_counts = {c: 0 for c in main_counters_aire + main_counters_tierra}
         for idx in idx_ag:
             if df_h.at[idx, 'Tarea'] == '1':
@@ -439,7 +432,6 @@ def logic_engine(df, no_tica_list, initial_counters):
                 available_flotantes.append(idx)
                 
         uncovered = []
-        # FASE 1: Match Exacto 
         for target_cnt in needs_coverage:
             covered = False
             for f_idx in available_flotantes:
@@ -454,7 +446,6 @@ def logic_engine(df, no_tica_list, initial_counters):
                     break
             if not covered: uncovered.append(target_cnt)
             
-        # FASE 2: Resto de flotantes libres
         still_uncovered = []
         for target_cnt in uncovered:
             covered = False
@@ -468,7 +459,6 @@ def logic_engine(df, no_tica_list, initial_counters):
                 break
             if not covered: still_uncovered.append(target_cnt)
                 
-        # FASE 3: Coordinadores / HHEE
         for target_cnt in still_uncovered:
             covered = False
             cand = find_coord_cover()
@@ -480,7 +470,6 @@ def logic_engine(df, no_tica_list, initial_counters):
             if not covered:
                 hhee_counters.append({'Fecha': d, 'Hora': h, 'Counter': target_cnt})
 
-        # --- MOTOR COBERTURA ANFITRIONES V66 ---
         active_nac = sum(1 for idx in idx_an if df_h.at[idx, 'Tarea'] == '1' and df_h.at[idx, 'Counter'] == 'Zona Nac')
         active_int = sum(1 for idx in idx_an if df_h.at[idx, 'Tarea'] == '1' and df_h.at[idx, 'Counter'] == 'Zona Int')
         
@@ -510,7 +499,6 @@ def logic_engine(df, no_tica_list, initial_counters):
             if not covered:
                 hhee_anf.append({'Fecha': d, 'Hora': h, 'Counter': tz})
 
-    # 3. POST-PROCESO ANFITRIONES (Inversión de Tareas)
     for (name, sd), group in df_h[df_h['Rol'] == 'Anfitrion'].groupby(['Nombre', 'Shift_Date']):
         valid_locs = group[~group['Counter'].isin(['Casino'])]['Counter']
         if not valid_locs.empty:
@@ -526,7 +514,6 @@ def logic_engine(df, no_tica_list, initial_counters):
             elif loc == true_base: df_h.at[idx, 'Tarea'] = '1'
             else: df_h.at[idx, 'Tarea'] = f"3: Cubrir {loc}" 
 
-    # Bases finales
     for idx, row in df_h.iterrows():
         if row['Hora'] != -1: 
             if row['Rol'] == 'Coordinador': df_h.at[idx, 'Base_Diaria'] = "General"
@@ -537,7 +524,6 @@ def logic_engine(df, no_tica_list, initial_counters):
     if 'incidencias' in st.session_state and st.session_state.incidencias:
         df_h = apply_incidents(df_h, st.session_state.incidencias)
 
-    # 4. GENERAR HHEE ROWS (Base para el Combobox en Excel)
     unique_dates = sorted(df_h['Fecha'].unique())
     hhee_set = set((x['Fecha'], x['Hora'], x['Counter']) for x in hhee_counters)
     
@@ -567,7 +553,6 @@ def logic_engine(df, no_tica_list, initial_counters):
                 df_h = pd.concat([df_h, pd.DataFrame([{**base_row, 'Fecha': d, 'Hora': h, 'Tarea': task_val, 'Shift_Date': d}])], ignore_index=True)
             df_h = pd.concat([df_h, pd.DataFrame([{**base_row, 'Fecha': d, 'Hora': -1, 'Tarea': '-', 'Shift_Date': d}])], ignore_index=True)
 
-    # 5. CONSTRUIR DICCIONARIO DE ELEGIBLES PARA HHEE (Recién Salidos + Supervisores)
     eligible_hhee = {}
     supervisores = df_h[df_h['Rol'] == 'Supervisor']['Nombre'].unique().tolist()
     
@@ -588,7 +573,7 @@ def logic_engine(df, no_tica_list, initial_counters):
 
     return df_h, raw_shifts_map, eligible_hhee
 
-# --- EXCEL GENERATOR (V66) ---
+# --- EXCEL GENERATOR (V67) ---
 def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
@@ -605,7 +590,9 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     f_int = wb.add_format({'bg_color': '#DDEBF7', 'border': 1, 'align': 'center'})
     f_sep_col = wb.add_format({'bg_color': '#1C1C1C', 'border': 1, 'align': 'center'}) 
     
+    # FORMATOS HHEE CORREGIDOS EN V67
     f_hhee_req = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'border': 1, 'align': 'center', 'bold': True})
+    f_hhee_bad = wb.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006', 'border': 1, 'align': 'center', 'bold': True})
     f_hhee_ok = wb.add_format({'bg_color': '#C6EFCE', 'font_color': '#006100', 'border': 1, 'align': 'center', 'bold': True})
     
     st_map = {
@@ -625,14 +612,10 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     df_staff_sorted = df_staff[['Nombre', 'Rol', 'Sub_Group', 'Role_Rank']].drop_duplicates().sort_values(['Role_Rank', 'Nombre'])
     df_hhee_sorted = df_hhee[['Nombre', 'Rol', 'Sub_Group', 'Role_Rank']].drop_duplicates().sort_values(['Nombre'])
     
-    # ------------------------------------------------
-    # HOJAS OCULTAS DE VALIDACIÓN
-    # ------------------------------------------------
     ws_data = wb.add_worksheet("Datos_Validacion")
     unique_roles = sorted([str(x) for x in df['Rol'].unique() if x != 'HHEE'])
     unique_names = sorted([str(x) for x in df['Nombre'].unique() if 'HHEE' not in str(x)])
     
-    # Menú para anulación manual
     opciones_manuales = ['1', '2', 'C', '3: Cubrir T1 AIRE', '3: Cubrir T1 TIERRA', '3: Cubrir T2 AIRE', '3: Cubrir T2 TIERRA', 'Zona Int', 'Zona Nac', 'General']
     ws_data.write_column(1, 0, unique_roles)
     ws_data.write_column(1, 1, unique_names)
@@ -643,17 +626,15 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     role_range = f"Datos_Validacion!$A$2:$A${len(unique_roles)+1}"
     manual_range = f"Datos_Validacion!$C$2:$C${len(opciones_manuales)+1}"
 
-    # Hoja para las listas de HHEE elegibles por hora
     ws_hhee_val = wb.add_worksheet("HHEE_Val")
     ws_hhee_val.hide()
     
-    val_map = {} # (d, h) -> xl_col_name
+    val_map = {} 
     v_col = 0
     for d in dates:
         for h in range(24):
             ws_hhee_val.write(0, v_col, f"{d.strftime('%Y-%m-%d')}_{h}")
             eligibles = eligible_hhee.get((d, h), [])
-            # Si no hay nadie, poner un guion para que no rompa la validación
             if not eligibles: eligibles = ["-"]
             ws_hhee_val.write_column(1, v_col, eligibles)
             val_map[(d, h)] = xlsxwriter.utility.xl_col_to_name(v_col)
@@ -691,21 +672,15 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     ws_teorico.hide()
     ws_shiftdate.hide()
 
-    # ------------------------------------------------
-    # HOJA 2: BITÁCORA
-    # ------------------------------------------------
     ws_bit = wb.add_worksheet("Bitacora_Incidencias")
     headers_bit = ["Tipo Colaborador", "Nombre Colaborador", "Fecha (YYYY-MM-DD)", "Tipo Incidencia", "Hora Inicio (0-23)", "Hora Fin (0-23)"]
     for i, h in enumerate(headers_bit): ws_bit.write(0, i, h, f_cabify)
     ws_bit.data_validation('A2:A1000', {'validate': 'list', 'source': role_range})
     ws_bit.data_validation('B2:B1000', {'validate': 'list', 'source': name_range})
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
-    ws_bit.write(0, 7, "GUÍA OPERATIVA V66:", f_cabify)
+    ws_bit.write(0, 7, "GUÍA OPERATIVA V67:", f_cabify)
     ws_bit.write(1, 7, "INASISTENCIA: Marque el día de inicio del turno. Borrará automáticamente la madrugada siguiente.")
 
-    # ------------------------------------------------
-    # HOJA 3: PLAN OPERATIVO
-    # ------------------------------------------------
     ws_real = wb.add_worksheet("Plan_Operativo")
     ws_real.write(9, 0, "Colaborador", f_cabify)
     ws_real.write(9, 1, "Rol", f_cabify)
@@ -749,7 +724,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
             f_an = f'=COUNTIFS($B$11:$B$1000,"Anfitrion",{col_let}11:{col_let}1000,"<>FALTA",{col_let}11:{col_let}1000,"?*")'
             ws_real.write_formula(4, col_idx, f_an, f_header_count)
             
-            # Cuenta cuantas HHEE se requerían originalmente desde Plan Teorico
             f_h_ag = f'=COUNTIFS($A$11:$A$1000,"HHEE Agente*",Plan_Teorico!{col_let}11:{col_let}1000,"REQ")'
             ws_real.write_formula(5, col_idx, f_h_ag, f_header_hhee)
             f_h_co = f'=COUNTIFS($A$11:$A$1000,"HHEE Coordinación",Plan_Teorico!{col_let}11:{col_let}1000,"REQ")'
@@ -764,12 +738,12 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     
     hhee_tot_range = f"D9:{xlsxwriter.utility.xl_col_to_name(col-1)}9"
     ws_real.conditional_format(hhee_tot_range, {'type': 'cell', 'criteria': '=', 'value': 0, 'format': f_hhee_ok})
+    # LÍNEA CORREGIDA V67
     ws_real.conditional_format(hhee_tot_range, {'type': 'cell', 'criteria': '>', 'value': 0, 'format': f_hhee_bad})
 
     row = 10
     curr_group = ""
     
-    # PINTAR STAFF
     for _, p in df_staff_sorted.iterrows():
         n = p['Nombre']
         r = p['Rol']
@@ -821,7 +795,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
                 key = f"{n}_{d_iso}"
                 for h in range(24):
                     col_plan_letter = xlsxwriter.utility.xl_col_to_name(h + 1)
-                    # La fórmula por defecto. Si el humano elige del combobox, esta fórmula se borra en esa celda.
                     formula = (
                         f'=IF(INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0))&""="", "",'
                         f'IF(COUNTIFS(Bitacora_Incidencias!$B:$B,"{n}",Bitacora_Incidencias!$C:$C,INDEX(Plan_ShiftDate!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_ShiftDate!$A:$A,0)),Bitacora_Incidencias!$D:$D,"Inasistencia")>0,"FALTA",'
@@ -829,12 +802,9 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
                         f'INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0)) & "")))'
                     )
                     ws_real.write_formula(row, c_start+2+h, formula, f_base)
-                    
-                    # Validacion Manual para la Grilla
                     ws_real.data_validation(row, c_start+2+h, row, c_start+2+h, {'validate': 'list', 'source': manual_range, 'show_error': False})
         row += 1
     
-    # PINTAR HHEE
     hhee_start_row = row + 1
     ws_real.merge_range(row, 0, row, col-1, "REQUERIMIENTOS HHEE (SELECCIONE NOMBRE)", f_group)
     row += 1
@@ -858,11 +828,9 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
             key = f"{n}_{d_iso}"
             for h in range(24):
                 col_plan_letter = xlsxwriter.utility.xl_col_to_name(h + 1)
-                # Muestra "REQ" si hace falta, sino vacío. Si el humano pone un nombre, reemplaza el "REQ".
                 formula = f'=IF(INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0))="REQ", "REQ", "")'
                 ws_real.write_formula(row, c_start+2+h, formula, f_base)
                 
-                # Validación Dinámica: Lista de los que terminaron a esa hora
                 val_col_let = val_map.get((d, h))
                 if val_col_let:
                     val_source = f'=HHEE_Val!${val_col_let}$2:${val_col_let}$100'
@@ -886,12 +854,11 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
         val = k if len(k) > 2 else f'"{k}"'
         ws_real.conditional_format(data_range, {'type': 'text' if len(k)>2 else 'cell', 'criteria': criteria, 'value': val, 'format': fmt})
 
-    # Si en el rango de HHEE no dice "REQ" y no está vacío, significa que se asignó a alguien, pintarlo verde/ok
     hhee_box_range = f"D{hhee_start_row+1}:{end_col_let}{hhee_end_row}"
     ws_real.conditional_format(hhee_box_range, {'type': 'formula', 'criteria': f'=AND(D{hhee_start_row+1}<>"", D{hhee_start_row+1}<>"REQ")', 'format': f_hhee_ok})
 
     # ------------------------------------------------
-    # HOJA 4: RESUMEN V66 (Con contador dinámico de HHEE manuales)
+    # HOJA 4: RESUMEN
     # ------------------------------------------------
     ws_res = wb.add_worksheet("Resumen_Estadistico")
     f_bold = wb.add_format({'bold': True})
@@ -921,7 +888,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     ws_res.write(r_idx, 1, len(hhee_active))
     r_idx += 2
     
-    # NUEVA TABLA V66: Conteo Dinámico de HHEE
     ws_res.write(r_idx, 0, "HHEE ASIGNADAS MANUALMENTE", f_bold)
     ws_res.write(r_idx+1, 0, "Colaborador", f_bold)
     ws_res.write(r_idx+1, 1, "Horas Asignadas", f_bold)
@@ -930,7 +896,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     for _, p in df_staff_sorted.iterrows():
         n = p['Nombre']
         ws_res.write(r_idx, 0, n)
-        # Fórmula en Excel: Cuenta cuantas veces aparece su nombre en el bloque de HHEE
         f_count = f'=COUNTIF(Plan_Operativo!$D${hhee_start_row+1}:${end_col_let}${hhee_end_row}, "{n}")'
         ws_res.write_formula(r_idx, 1, f_count)
         r_idx += 1
@@ -939,7 +904,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d, eligible_hhee):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V66"):
+if st.sidebar.button("🚀 Generar Planificación V67"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -951,8 +916,8 @@ if st.sidebar.button("🚀 Generar Planificación V66"):
                     dfs.append(process_file_sheet(f, s, role, start_d, end_d))
             full = pd.concat(dfs)
             
-            if full.empty: st.error("Sin datos.")
+            if full.empty: st.error("Sin datos válidos (revise el formato del Excel o las fechas).")
             else:
                 final, raw_map, el_hhee = logic_engine(full, agents_no_tica, init_counters)
-                st.success("¡Listo! Descarga la Suite Operativa V66.")
-                st.download_button("📥 Descargar Suite (V66)", make_excel(final, raw_map, start_d, end_d, el_hhee), f"Planificacion_Operativa.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V67.")
+                st.download_button("📥 Descargar Suite (V67)", make_excel(final, raw_map, start_d, end_d, el_hhee), f"Planificacion_Operativa.xlsx")
