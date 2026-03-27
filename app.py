@@ -7,14 +7,13 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V71 - Básico)", layout="wide")
-st.title("✈️ Gestor de Turnos: V71 (Asignación Manual)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V72)", layout="wide")
+st.title("✈️ Gestor de Turnos: V72 (Limpieza de Interfaz y Supervisores)")
 st.markdown("""
-**Versión Esencial:**
-1. **Sábana Limpia:** El sistema procesa los turnos y coloca los bloques de horas (Tarea `1`).
-2. **Colaciones Automáticas:** Asigna la tarea `C` basada en la hora de ingreso para ahorrar tiempo.
-3. **Control del Supervisor:** La asignación de Counters y Zonas ("Por Asignar") se hace directamente en el Excel.
-4. **Cero Automatización de Cobertura:** No se mueven agentes ni se generan HHEE automáticamente. Todo es control manual.
+**Ajustes de esta versión:**
+1. **Supervisores Cargados:** Se mejoró el escáner para leer hojas que solo tienen números en lugar de fechas completas.
+2. **Dotación Desglosada:** El contador superior ahora muestra activos por cada rol (Agentes, Anfitriones, etc.).
+3. **Combobox Filtrados:** Los menús desplegables solo aparecerán en los Agentes y en las HHEE manuales.
 """)
 
 # --- INICIALIZACIÓN ---
@@ -51,13 +50,21 @@ def parse_shift_time(shift_str):
     return [], None
 
 def find_date_header_row(df):
+    # Escáner mejorado para detectar hojas como "Supervisores" que usan números (1, 2, 3...)
     for i in range(min(20, len(df))):
         row = df.iloc[i]
         date_count = 0
+        num_count = 0
         for val in row:
             if isinstance(val, (datetime, pd.Timestamp)): date_count += 1
             elif isinstance(val, str) and re.match(r'\d{4}-\d{2}-\d{2}', val): date_count += 1
+            else:
+                try:
+                    n = int(float(val))
+                    if 1 <= n <= 31: num_count += 1
+                except: pass
         if date_count > 3: return i, 'date'
+        if num_count > 10: return i, 'number'
     return None, None
 
 def process_file_sheet(file, sheet_name, role, start_date, end_date):
@@ -67,12 +74,10 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
         df_raw = pd.read_excel(file, sheet_name=sheet_name, header=None)
         header_idx, header_type = find_date_header_row(df_raw)
         if header_idx is None: return pd.DataFrame()
+        
         df = pd.read_excel(file, sheet_name=sheet_name, header=header_idx)
         name_col = df.columns[0]
-        for col in df.columns:
-            if isinstance(col, str) and ("nombre" in col.lower() or "cargo" in col.lower() or "supervisor" in col.lower()):
-                name_col = col
-                break
+        
         date_map = {}
         if start_date:
             load_start = start_date - timedelta(days=1)
@@ -86,10 +91,20 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
                 elif header_type == 'number':
                     try: 
                         d_num = int(float(col))
-                        col_date = datetime(start_date.year, start_date.month, d_num)
-                        if d_num > 20 and start_date.day < 5:
-                             col_date = col_date - timedelta(days=30)
+                        # Lógica para deducir el mes basado en start_date
+                        base_date = start_date
+                        if d_num > 20 and base_date.day < 10: 
+                            if base_date.month == 1: c_year, c_month = base_date.year - 1, 12
+                            else: c_year, c_month = base_date.year, base_date.month - 1
+                        elif d_num < 10 and base_date.day > 20: 
+                            if base_date.month == 12: c_year, c_month = base_date.year + 1, 1
+                            else: c_year, c_month = base_date.year, base_date.month + 1
+                        else:
+                            c_year, c_month = base_date.year, base_date.month
+                            
+                        col_date = datetime(c_year, c_month, d_num)
                     except: pass
+                    
                 if col_date:
                     c_dt = col_date.date() if isinstance(col_date, datetime) else col_date
                     if load_start <= c_dt <= end_date:
@@ -100,7 +115,10 @@ def process_file_sheet(file, sheet_name, role, start_date, end_date):
                 if pd.isna(name_val): continue
                 s_name = str(name_val).strip()
                 if s_name == "" or len(s_name) < 3: continue
-                if any(k in s_name.lower() for k in ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas"]): continue
+                
+                # Ignorar filas de encabezados internos
+                ignore_words = ["nombre", "cargo", "turno", "fecha", "total", "suma", "horas", "agente", "coordinador", "anfitrion", "supervisor"]
+                if any(k in s_name.lower() for k in ignore_words): continue
                 if s_name.replace('.', '', 1).isdigit(): continue
 
                 clean_name = s_name.title()
@@ -164,7 +182,7 @@ for label, key in [("Agente", "exec"), ("Coordinador", "coord"), ("Anfitrion", "
             uploaded_sheets[key] = (f, sel_sheet)
         except: pass
 
-# --- MOTOR LÓGICO BÁSICO (V71) ---
+# --- MOTOR LÓGICO BÁSICO (V72) ---
 def logic_engine_basic(df):
     rows = []
     raw_shifts_map = {}
@@ -182,7 +200,7 @@ def logic_engine_basic(df):
                 else: pm += 1
         agent_class[name] = "Nocturno" if pm > am else "Diurno"
 
-    # Expandir turnos y asociar fecha de origen
+    # Expandir turnos
     for _, r in df.iterrows():
         hours, start_h = parse_shift_time(r['Turno_Raw'])
         sub_group = "General"
@@ -216,19 +234,17 @@ def logic_engine_basic(df):
     df_h = pd.DataFrame(rows)
     if df_h.empty: return df_h, raw_shifts_map
 
-    # PROCESAR HORA A HORA (SOLO ASIGNACIÓN DE COLACIONES Y TAREA 1)
+    # PROCESAR HORA A HORA
     for (d, h), g in df_h[df_h['Hora'] != -1].groupby(['Fecha', 'Hora']):
         for idx in g.index:
             rol = df_h.at[idx, 'Rol']
-            sh = df_h.at[idx, 'Start_H'] # Aquí definimos la variable "sh"
+            sh = df_h.at[idx, 'Start_H'] 
             
-            # Asignar tarea 1 básica
+            # Asignación Lógica Base
             if rol in ['Coordinador', 'Supervisor']:
                 df_h.at[idx, 'Base_Diaria'] = 'General'
-                # Lógica fija supervisores/coords
                 nm = df_h.at[idx, 'Nombre']
                 is_odd = hash(nm) % 2 != 0
-                # CORRECCIÓN V71: Usar "sh" en lugar de "st_h"
                 if sh == 10:
                     if h == 10: df_h.at[idx, 'Tarea'] = '2'
                     elif h in [14, 15]:
@@ -244,11 +260,22 @@ def logic_engine_basic(df):
                         else: df_h.at[idx, 'Tarea'] = '2'
                 else:
                     df_h.at[idx, 'Tarea'] = '1'
-            else:
+            elif rol == 'Anfitrion':
+                df_h.at[idx, 'Base_Diaria'] = 'Losa' # Anfitriones no necesitan combobox de counter
+                df_h.at[idx, 'Tarea'] = '1'
+                
+                # Colación básica anfitriones
+                break_h = -1
+                if 0 <= sh <= 11: break_h = 14
+                elif 18 <= sh <= 23: break_h = 3
+                else: break_h = (sh + 4) % 24
+                if h == break_h: df_h.at[idx, 'Tarea'] = 'C'
+
+            else: # Agentes
                 df_h.at[idx, 'Base_Diaria'] = 'Por Asignar'
                 df_h.at[idx, 'Tarea'] = '1'
 
-                # Colaciones (Cálculo matemático)
+                # Colaciones Agentes
                 break_h = -1
                 if 0 <= sh <= 11:
                     if sh <= 8: break_h = 12
@@ -268,7 +295,6 @@ def logic_engine_basic(df):
     if 'incidencias' in st.session_state and st.session_state.incidencias:
         df_h = apply_incidents(df_h, st.session_state.incidencias)
 
-    # CREAR FILAS GENÉRICAS PARA HHEE MANUALES (Al final del Excel)
     unique_dates = sorted(df_h['Fecha'].unique())
     hhee_labels = ["HHEE Agente 1", "HHEE Agente 2", "HHEE Agente 3", "HHEE Anfitrion 1", "HHEE Coord/Sup 1"]
     
@@ -281,7 +307,7 @@ def logic_engine_basic(df):
 
     return df_h, raw_shifts_map
 
-# --- EXCEL GENERATOR (V71) ---
+# --- EXCEL GENERATOR (V72) ---
 def make_excel(df, raw_shifts_map, start_d, end_d):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
@@ -295,7 +321,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     
     f_sep_col = wb.add_format({'bg_color': '#1C1C1C', 'border': 1, 'align': 'center'}) 
     
-    # Colores base
     st_map = {
         '2': wb.add_format({'bg_color': '#FFF2CC', 'border': 1, 'align': 'center'}),
         'C': wb.add_format({'bg_color': '#C6E0B4', 'border': 1, 'align': 'center'}),
@@ -313,15 +338,12 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     df_staff_sorted = df_staff[['Nombre', 'Rol', 'Sub_Group', 'Role_Rank']].drop_duplicates().sort_values(['Role_Rank', 'Nombre'])
     df_hhee_sorted = df_hhee[['Nombre', 'Rol', 'Sub_Group', 'Role_Rank']].drop_duplicates().sort_values(['Nombre'])
     
-    # ------------------------------------------------
-    # HOJAS OCULTAS DE VALIDACIÓN
-    # ------------------------------------------------
     ws_data = wb.add_worksheet("Datos_Validacion")
     unique_roles = sorted([str(x) for x in df['Rol'].unique() if x != 'HHEE'])
     unique_names = sorted([str(x) for x in df['Nombre'].unique() if 'HHEE' not in str(x)])
     
-    opciones_grilla = ['1', '2', 'C', 'T1 AIRE', 'T1 TIERRA', 'T2 AIRE', 'T2 TIERRA', 'Zona Int', 'Zona Nac', 'General']
-    opciones_lugar = ['Por Asignar', 'T1 AIRE', 'T1 TIERRA', 'T2 AIRE', 'T2 TIERRA', 'Zona Int', 'Zona Nac', 'General']
+    opciones_grilla = ['1', '2', 'C', 'T1 AIRE', 'T1 TIERRA', 'T2 AIRE', 'T2 TIERRA', 'REQ']
+    opciones_lugar = ['Por Asignar', 'T1 AIRE', 'T1 TIERRA', 'T2 AIRE', 'T2 TIERRA']
     
     ws_data.write_column(1, 0, unique_roles)
     ws_data.write_column(1, 1, unique_names)
@@ -335,9 +357,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     lugar_range = f"Datos_Validacion!$D$2:$D${len(opciones_lugar)+1}"
 
     ws_teorico = wb.add_worksheet("Plan_Teorico")
-    ws_shiftdate = wb.add_worksheet("Plan_ShiftDate") 
     ws_teorico.write(0, 0, "ID") 
-    ws_shiftdate.write(0, 0, "ID")
     
     teorico_row = 1
     for _, p in pd.concat([df_staff_sorted, df_hhee_sorted]).iterrows():
@@ -346,50 +366,40 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
             d_iso = pd.to_datetime(d).strftime("%Y-%m-%d")
             key = f"{n}_{d_iso}"
             ws_teorico.write(teorico_row, 0, key)
-            ws_shiftdate.write(teorico_row, 0, key)
             
             subset = df[(df['Nombre']==n) & (df['Fecha']==d)]
             for h in range(24):
                 try:
                     val = subset[subset['Hora'] == h]
-                    if not val.empty:
-                        task = str(val.iloc[0]['Tarea'])
-                        s_date = pd.to_datetime(val.iloc[0]['Shift_Date']).strftime("%Y-%m-%d")
-                    else:
-                        task = ""; s_date = ""
+                    if not val.empty: task = str(val.iloc[0]['Tarea'])
+                    else: task = ""
                     ws_teorico.write_string(teorico_row, 1+h, task)
-                    ws_shiftdate.write_string(teorico_row, 1+h, s_date)
                 except:
                     ws_teorico.write_string(teorico_row, 1+h, "")
-                    ws_shiftdate.write_string(teorico_row, 1+h, "")
             teorico_row += 1
     ws_teorico.hide()
-    ws_shiftdate.hide()
 
-    # ------------------------------------------------
-    # HOJA 2: BITÁCORA
-    # ------------------------------------------------
     ws_bit = wb.add_worksheet("Bitacora_Incidencias")
     headers_bit = ["Tipo Colaborador", "Nombre Colaborador", "Fecha (YYYY-MM-DD)", "Tipo Incidencia", "Hora Inicio (0-23)", "Hora Fin (0-23)"]
     for i, h in enumerate(headers_bit): ws_bit.write(0, i, h, f_cabify)
     ws_bit.data_validation('A2:A1000', {'validate': 'list', 'source': role_range})
     ws_bit.data_validation('B2:B1000', {'validate': 'list', 'source': name_range})
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
-    ws_bit.write(0, 7, "GUÍA OPERATIVA V71:", f_cabify)
-    ws_bit.write(1, 7, "INASISTENCIA: Marque el día de inicio del turno. Borrará automáticamente la madrugada siguiente.")
+    ws_bit.write(0, 7, "GUÍA OPERATIVA V72:", f_cabify)
+    ws_bit.write(1, 7, "INASISTENCIA: Marque el día de inicio del turno.")
 
-    # ------------------------------------------------
-    # HOJA 3: PLAN OPERATIVO
-    # ------------------------------------------------
     ws_real = wb.add_worksheet("Plan_Operativo")
-    ws_real.write(5, 0, "Colaborador", f_cabify)
-    ws_real.write(5, 1, "Rol", f_cabify)
-    ws_real.freeze_panes(6, 2)
+    ws_real.write(7, 0, "Colaborador", f_cabify)
+    ws_real.write(7, 1, "Rol", f_cabify)
+    ws_real.freeze_panes(8, 2)
     
     col = 2
     d_map = {}
     
-    ws_real.write(2, 0, "DOTACIÓN ACTIVA", f_header_count)
+    ws_real.write(2, 0, "DOTACIÓN AGENTES", f_header_count)
+    ws_real.write(3, 0, "DOTACIÓN ANFITRIONES", f_header_count)
+    ws_real.write(4, 0, "DOTACIÓN COORDINADORES", f_header_count)
+    ws_real.write(5, 0, "DOTACIÓN SUPERVISORES", f_header_count)
     
     días_es = {0: 'Lun', 1: 'Mar', 2: 'Mié', 3: 'Jue', 4: 'Vie', 5: 'Sáb', 6: 'Dom'}
     
@@ -398,25 +408,31 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
         d_str = f"{días_es[d.weekday()]} {pd.to_datetime(d).strftime('%d-%b')}"
         
         ws_real.set_column(col, col, 1.5)
-        ws_real.write(5, col, "", f_sep_col)
+        ws_real.write(7, col, "", f_sep_col)
         
         ws_real.merge_range(0, col+1, 0, col+26, d_str, f_date)
-        ws_real.write(5, col+1, "Turno", f_cabify)
-        ws_real.write(5, col+2, "Lugar (Supervisor)", f_cabify)
+        ws_real.write(7, col+1, "Turno", f_cabify)
+        ws_real.write(7, col+2, "Lugar", f_cabify)
         
         d_map[d_iso] = col + 1
         
         for h in range(24):
-            ws_real.write(5, col+3+h, h, f_cabify)
+            ws_real.write(7, col+3+h, h, f_cabify)
             col_idx = col+3+h
             col_let = xlsxwriter.utility.xl_col_to_name(col_idx)
             
-            f_ag = f'=COUNTIFS($B$7:$B$1000,"<>HHEE",{col_let}7:{col_let}1000,"<>FALTA",{col_let}7:{col_let}1000,"<>Libre",{col_let}7:{col_let}1000,"<>*Ausente*", {col_let}7:{col_let}1000,"?*")'
+            f_ag = f'=COUNTIFS($B$9:$B$1000,"Agente",{col_let}9:{col_let}1000,"<>FALTA",{col_let}9:{col_let}1000,"<>Libre",{col_let}9:{col_let}1000,"<>*Ausente*", {col_let}9:{col_let}1000,"?*")'
             ws_real.write_formula(2, col_idx, f_ag, f_header_count)
+            f_an = f'=COUNTIFS($B$9:$B$1000,"Anfitrion",{col_let}9:{col_let}1000,"<>FALTA",{col_let}9:{col_let}1000,"<>Libre",{col_let}9:{col_let}1000,"<>*Ausente*", {col_let}9:{col_let}1000,"?*")'
+            ws_real.write_formula(3, col_idx, f_an, f_header_count)
+            f_co = f'=COUNTIFS($B$9:$B$1000,"Coordinador",{col_let}9:{col_let}1000,"<>FALTA",{col_let}9:{col_let}1000,"<>Libre",{col_let}9:{col_let}1000,"<>*Ausente*", {col_let}9:{col_let}1000,"?*")'
+            ws_real.write_formula(4, col_idx, f_co, f_header_count)
+            f_su = f'=COUNTIFS($B$9:$B$1000,"Supervisor",{col_let}9:{col_let}1000,"<>FALTA",{col_let}9:{col_let}1000,"<>Libre",{col_let}9:{col_let}1000,"<>*Ausente*", {col_let}9:{col_let}1000,"?*")'
+            ws_real.write_formula(5, col_idx, f_su, f_header_count)
 
         col += 27
 
-    row = 6
+    row = 8
     curr_group = ""
     
     for _, p in df_staff_sorted.iterrows():
@@ -462,19 +478,25 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
                 ws_real.write(row, c_start, str(t_raw_original), f_base)
                 
                 ws_real.write(row, c_start+1, str(lugar), f_base)
-                ws_real.data_validation(row, c_start+1, row, c_start+1, {'validate': 'list', 'source': lugar_range, 'show_error': False})
+                
+                # SOLO Agentes tienen combobox de LUGAR
+                if r == "Agente":
+                    ws_real.data_validation(row, c_start+1, row, c_start+1, {'validate': 'list', 'source': lugar_range, 'show_error': False})
             
                 key = f"{n}_{d_iso}"
                 for h in range(24):
                     col_plan_letter = xlsxwriter.utility.xl_col_to_name(h + 1)
                     formula = (
                         f'=IF(INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0))&""="", "",'
-                        f'IF(COUNTIFS(Bitacora_Incidencias!$B:$B,"{n}",Bitacora_Incidencias!$C:$C,INDEX(Plan_ShiftDate!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_ShiftDate!$A:$A,0)),Bitacora_Incidencias!$D:$D,"Inasistencia")>0,"FALTA",'
+                        f'IF(COUNTIFS(Bitacora_Incidencias!$B:$B,"{n}",Bitacora_Incidencias!$C:$C,"{d_iso}",Bitacora_Incidencias!$D:$D,"Inasistencia")>0,"FALTA",'
                         f'IF(COUNTIFS(Bitacora_Incidencias!$B:$B,"{n}",Bitacora_Incidencias!$C:$C,"{d_iso}",Bitacora_Incidencias!$E:$E,"<={h}",Bitacora_Incidencias!$F:$F,">={h}",Bitacora_Incidencias!$D:$D,"<>Inasistencia")>0,"INCIDENCIA",'
                         f'INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0)) & "")))'
                     )
                     ws_real.write_formula(row, c_start+2+h, formula, f_base)
-                    ws_real.data_validation(row, c_start+2+h, row, c_start+2+h, {'validate': 'list', 'source': grilla_range, 'show_error': False})
+                    
+                    # SOLO Agentes tienen combobox de GRILLA
+                    if r == "Agente":
+                        ws_real.data_validation(row, c_start+2+h, row, c_start+2+h, {'validate': 'list', 'source': grilla_range, 'show_error': False})
         row += 1
     
     ws_real.merge_range(row, 0, row, col-1, "HHEE Y COBERTURAS MANUALES", f_group)
@@ -493,6 +515,8 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
             ws_real.write(row, c_start-1, "", f_sep_col)
             ws_real.write(row, c_start, "Manual", f_base)
             ws_real.write(row, c_start+1, "Por Asignar", f_base)
+            
+            # HHEE rows tienen combobox
             ws_real.data_validation(row, c_start+1, row, c_start+1, {'validate': 'list', 'source': lugar_range, 'show_error': False})
             
             for h in range(24):
@@ -502,7 +526,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
         row += 1
 
     end_col_let = xlsxwriter.utility.xl_col_to_name(col-1)
-    data_range = f"D7:{end_col_let}{row}"
+    data_range = f"D9:{end_col_let}{row}"
     ws_real.conditional_format(data_range, {'type': 'cell', 'criteria': 'equal to', 'value': '"FALTA"', 'format': f_alert})
     ws_real.conditional_format(data_range, {'type': 'cell', 'criteria': 'equal to', 'value': '"INCIDENCIA"', 'format': f_alert})
     
@@ -515,7 +539,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V71 (Manual)"):
+if st.sidebar.button("🚀 Generar Planificación V72 (Manual)"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -530,5 +554,5 @@ if st.sidebar.button("🚀 Generar Planificación V71 (Manual)"):
             if full.empty: st.error("Sin datos válidos.")
             else:
                 final, raw_map = logic_engine_basic(full)
-                st.success("¡Listo! Descarga la Suite Operativa V71.")
-                st.download_button("📥 Descargar Suite (V71)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa_Manual.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V72.")
+                st.download_button("📥 Descargar Suite (V72)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa_Manual.xlsx")
