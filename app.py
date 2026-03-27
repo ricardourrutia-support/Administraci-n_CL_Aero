@@ -7,14 +7,13 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V73 - Básico)", layout="wide")
-st.title("✈️ Gestor de Turnos: V73 (Asignación Manual Limpia)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V74 - Básico)", layout="wide")
+st.title("✈️ Gestor de Turnos: V74 (Dotación Activa Exacta)")
 st.markdown("""
 **Versión Esencial:**
-1. **Sábana Limpia:** El sistema procesa los turnos y coloca los bloques de horas (Tarea `1`).
-2. **Control del Supervisor:** La asignación de Counters y Zonas ("Por Asignar") se hace directamente en el Excel.
-3. **Interfaz Optimizada:** Se eliminaron los combobox de la grilla horaria para facilitar la edición manual.
-4. **Anfitriones:** Combobox exclusivo habilitado para seleccionar Losa Nacional o Internacional.
+1. **Contadores Exactos:** La dotación activa en la cabecera ahora SOLO cuenta a quienes están explícitamente en Tarea `1` (excluye colaciones y tareas administrativas).
+2. **Sábana Limpia:** El sistema procesa los turnos y coloca los bloques de horas.
+3. **Interfaz Optimizada:** Combobox limitados solo a las zonas necesarias para facilitar la lectura.
 """)
 
 # --- INICIALIZACIÓN ---
@@ -180,7 +179,7 @@ for label, key in [("Agente", "exec"), ("Coordinador", "coord"), ("Anfitrion", "
             uploaded_sheets[key] = (f, sel_sheet)
         except: pass
 
-# --- MOTOR LÓGICO BÁSICO (V73) ---
+# --- MOTOR LÓGICO BÁSICO (V74) ---
 def logic_engine_basic(df):
     rows = []
     raw_shifts_map = {}
@@ -301,7 +300,7 @@ def logic_engine_basic(df):
 
     return df_h, raw_shifts_map
 
-# --- EXCEL GENERATOR (V73) ---
+# --- EXCEL GENERATOR (V74) ---
 def make_excel(df, raw_shifts_map, start_d, end_d):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
@@ -396,7 +395,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     ws_bit.data_validation('A2:A1000', {'validate': 'list', 'source': role_range})
     ws_bit.data_validation('B2:B1000', {'validate': 'list', 'source': name_range})
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
-    ws_bit.write(0, 7, "GUÍA OPERATIVA V73:", f_cabify)
+    ws_bit.write(0, 7, "GUÍA OPERATIVA V74:", f_cabify)
     ws_bit.write(1, 7, "INASISTENCIA: Marque el día de inicio del turno.")
 
     # ------------------------------------------------
@@ -435,13 +434,14 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
             col_idx = col+3+h
             col_let = xlsxwriter.utility.xl_col_to_name(col_idx)
             
-            f_ag = f'=COUNTIFS($B$7:$B$1000,"<>HHEE",{col_let}7:{col_let}1000,"<>FALTA",{col_let}7:{col_let}1000,"<>Libre",{col_let}7:{col_let}1000,"<>*Ausente*", {col_let}7:{col_let}1000,"?*")'
+            # V74 CORRECCIÓN: Contar explícitamente "1" (Ignora Tarea C y 2)
+            f_ag = f'=COUNTIFS($B$7:$B$1000,"Agente",{col_let}7:{col_let}1000,"1")'
             ws_real.write_formula(2, col_idx, f_ag, f_header_count)
-            f_an = f'=COUNTIFS($B$7:$B$1000,"Anfitrion",{col_let}7:{col_let}1000,"<>FALTA",{col_let}7:{col_let}1000,"<>Libre",{col_let}7:{col_let}1000,"<>*Ausente*", {col_let}7:{col_let}1000,"?*")'
+            f_an = f'=COUNTIFS($B$7:$B$1000,"Anfitrion",{col_let}7:{col_let}1000,"1")'
             ws_real.write_formula(3, col_idx, f_an, f_header_count)
-            f_co = f'=COUNTIFS($B$7:$B$1000,"Coordinador",{col_let}7:{col_let}1000,"<>FALTA",{col_let}7:{col_let}1000,"<>Libre",{col_let}7:{col_let}1000,"<>*Ausente*", {col_let}7:{col_let}1000,"?*")'
+            f_co = f'=COUNTIFS($B$7:$B$1000,"Coordinador",{col_let}7:{col_let}1000,"1")'
             ws_real.write_formula(4, col_idx, f_co, f_header_count)
-            f_su = f'=COUNTIFS($B$7:$B$1000,"Supervisor",{col_let}7:{col_let}1000,"<>FALTA",{col_let}7:{col_let}1000,"<>Libre",{col_let}7:{col_let}1000,"<>*Ausente*", {col_let}7:{col_let}1000,"?*")'
+            f_su = f'=COUNTIFS($B$7:$B$1000,"Supervisor",{col_let}7:{col_let}1000,"1")'
             ws_real.write_formula(5, col_idx, f_su, f_header_count)
 
         col += 27
@@ -493,7 +493,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
                 
                 ws_real.write(row, c_start+1, str(lugar), f_base)
                 
-                # Combobox exclusivos por Rol en LUGAR
                 if r == "Agente":
                     ws_real.data_validation(row, c_start+1, row, c_start+1, {'validate': 'list', 'source': lugar_range_ag, 'show_error': False})
                 elif r == "Anfitrion":
@@ -528,7 +527,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
             ws_real.write(row, c_start, "Manual", f_base)
             ws_real.write(row, c_start+1, "Por Asignar", f_base)
             
-            # Identificar el combobox para HHEE según el nombre de la fila
             if "Anfitrion" in n:
                 ws_real.data_validation(row, c_start+1, row, c_start+1, {'validate': 'list', 'source': lugar_range_anf, 'show_error': False})
             elif "Agente" in n:
@@ -553,7 +551,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V73 (Manual)"):
+if st.sidebar.button("🚀 Generar Planificación V74 (Manual)"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -568,5 +566,5 @@ if st.sidebar.button("🚀 Generar Planificación V73 (Manual)"):
             if full.empty: st.error("Sin datos válidos.")
             else:
                 final, raw_map = logic_engine_basic(full)
-                st.success("¡Listo! Descarga la Suite Operativa V73.")
-                st.download_button("📥 Descargar Suite (V73)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa_Manual.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V74.")
+                st.download_button("📥 Descargar Suite (V74)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa_Manual.xlsx")
