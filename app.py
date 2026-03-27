@@ -7,8 +7,8 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V70 - Básico)", layout="wide")
-st.title("✈️ Gestor de Turnos: V70 (Asignación Manual)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V71 - Básico)", layout="wide")
+st.title("✈️ Gestor de Turnos: V71 (Asignación Manual)")
 st.markdown("""
 **Versión Esencial:**
 1. **Sábana Limpia:** El sistema procesa los turnos y coloca los bloques de horas (Tarea `1`).
@@ -164,7 +164,7 @@ for label, key in [("Agente", "exec"), ("Coordinador", "coord"), ("Anfitrion", "
             uploaded_sheets[key] = (f, sel_sheet)
         except: pass
 
-# --- MOTOR LÓGICO BÁSICO (V70) ---
+# --- MOTOR LÓGICO BÁSICO (V71) ---
 def logic_engine_basic(df):
     rows = []
     raw_shifts_map = {}
@@ -220,7 +220,7 @@ def logic_engine_basic(df):
     for (d, h), g in df_h[df_h['Hora'] != -1].groupby(['Fecha', 'Hora']):
         for idx in g.index:
             rol = df_h.at[idx, 'Rol']
-            sh = df_h.at[idx, 'Start_H']
+            sh = df_h.at[idx, 'Start_H'] # Aquí definimos la variable "sh"
             
             # Asignar tarea 1 básica
             if rol in ['Coordinador', 'Supervisor']:
@@ -228,16 +228,17 @@ def logic_engine_basic(df):
                 # Lógica fija supervisores/coords
                 nm = df_h.at[idx, 'Nombre']
                 is_odd = hash(nm) % 2 != 0
-                if st_h == 10:
+                # CORRECCIÓN V71: Usar "sh" en lugar de "st_h"
+                if sh == 10:
                     if h == 10: df_h.at[idx, 'Tarea'] = '2'
                     elif h in [14, 15]:
                         if (h == 14 and is_odd) or (h == 15 and not is_odd): df_h.at[idx, 'Tarea'] = 'C'
                         else: df_h.at[idx, 'Tarea'] = '2'
-                elif st_h == 5:
+                elif sh == 5:
                     if h in [11, 12, 13]:
                         if h == 12: df_h.at[idx, 'Tarea'] = 'C'
                         else: df_h.at[idx, 'Tarea'] = '2'
-                elif st_h == 21:
+                elif sh == 21:
                     if h in [5, 6, 7]:
                         if h == 6: df_h.at[idx, 'Tarea'] = 'C'
                         else: df_h.at[idx, 'Tarea'] = '2'
@@ -247,7 +248,7 @@ def logic_engine_basic(df):
                 df_h.at[idx, 'Base_Diaria'] = 'Por Asignar'
                 df_h.at[idx, 'Tarea'] = '1'
 
-                # Colaciones (Cálculo matemático para ahorrarle tiempo al supervisor)
+                # Colaciones (Cálculo matemático)
                 break_h = -1
                 if 0 <= sh <= 11:
                     if sh <= 8: break_h = 12
@@ -280,7 +281,7 @@ def logic_engine_basic(df):
 
     return df_h, raw_shifts_map
 
-# --- EXCEL GENERATOR (V70) ---
+# --- EXCEL GENERATOR (V71) ---
 def make_excel(df, raw_shifts_map, start_d, end_d):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
@@ -374,7 +375,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     ws_bit.data_validation('A2:A1000', {'validate': 'list', 'source': role_range})
     ws_bit.data_validation('B2:B1000', {'validate': 'list', 'source': name_range})
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
-    ws_bit.write(0, 7, "GUÍA OPERATIVA V70:", f_cabify)
+    ws_bit.write(0, 7, "GUÍA OPERATIVA V71:", f_cabify)
     ws_bit.write(1, 7, "INASISTENCIA: Marque el día de inicio del turno. Borrará automáticamente la madrugada siguiente.")
 
     # ------------------------------------------------
@@ -460,7 +461,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
                 except: lugar = "?"
                 ws_real.write(row, c_start, str(t_raw_original), f_base)
                 
-                # Desplegable para que el Supervisor elija el Lugar del día
                 ws_real.write(row, c_start+1, str(lugar), f_base)
                 ws_real.data_validation(row, c_start+1, row, c_start+1, {'validate': 'list', 'source': lugar_range, 'show_error': False})
             
@@ -515,7 +515,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V70 (Manual)"):
+if st.sidebar.button("🚀 Generar Planificación V71 (Manual)"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -530,5 +530,5 @@ if st.sidebar.button("🚀 Generar Planificación V70 (Manual)"):
             if full.empty: st.error("Sin datos válidos.")
             else:
                 final, raw_map = logic_engine_basic(full)
-                st.success("¡Listo! Descarga la Suite Operativa V70.")
-                st.download_button("📥 Descargar Suite (V70)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa_Manual.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V71.")
+                st.download_button("📥 Descargar Suite (V71)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa_Manual.xlsx")
