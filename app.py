@@ -7,14 +7,14 @@ import xlsxwriter
 import re
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V75 - Básico)", layout="wide")
-st.title("✈️ Gestor de Turnos: V75 (Interfaz Limpia)")
+st.set_page_config(page_title="Gestor de Turnos Aeropuerto (V76 - Básico)", layout="wide")
+st.title("✈️ Gestor de Turnos: V76 (Franja Horaria Restaurada)")
 st.markdown("""
 **Versión Esencial:**
-1. **Sábana Impecable:** Los días libres no tienen menús desplegables ni texto basura. Celdas 100% limpias.
-2. **Colaciones Automáticas:** Asigna la tarea `C` basada en la hora de ingreso.
-3. **Control del Supervisor:** Combobox limitados solo a los días en que el personal realmente trabaja.
-4. **Dotación Activa:** El contador superior solo suma a quienes están en Tarea `1`.
+1. **Franja Horaria Visible:** Las horas (0 a 23) ahora se muestran correctamente arriba de la grilla.
+2. **Sábana Impecable:** Los días libres no tienen menús desplegables.
+3. **Colaciones Automáticas:** Asigna la tarea `C` basada en la hora de ingreso.
+4. **Dotación Activa:** El contador superior solo suma a quienes están operando en Tarea `1`.
 """)
 
 # --- INICIALIZACIÓN ---
@@ -180,7 +180,7 @@ for label, key in [("Agente", "exec"), ("Coordinador", "coord"), ("Anfitrion", "
             uploaded_sheets[key] = (f, sel_sheet)
         except: pass
 
-# --- MOTOR LÓGICO BÁSICO (V75) ---
+# --- MOTOR LÓGICO BÁSICO (V76) ---
 def logic_engine_basic(df):
     rows = []
     raw_shifts_map = {}
@@ -231,6 +231,7 @@ def logic_engine_basic(df):
     df_h = pd.DataFrame(rows)
     if df_h.empty: return df_h, raw_shifts_map
 
+    # PROCESAR HORA A HORA
     for (d, h), g in df_h[df_h['Hora'] != -1].groupby(['Fecha', 'Hora']):
         for idx in g.index:
             rol = df_h.at[idx, 'Rol']
@@ -300,7 +301,7 @@ def logic_engine_basic(df):
 
     return df_h, raw_shifts_map
 
-# --- EXCEL GENERATOR (V75) ---
+# --- EXCEL GENERATOR (V76) ---
 def make_excel(df, raw_shifts_map, start_d, end_d):
     out = io.BytesIO()
     wb = xlsxwriter.Workbook(out)
@@ -398,16 +399,16 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     ws_bit.data_validation('A2:A1000', {'validate': 'list', 'source': role_range})
     ws_bit.data_validation('B2:B1000', {'validate': 'list', 'source': name_range})
     ws_bit.data_validation('D2:D1000', {'validate': 'list', 'source': ['Inasistencia', 'Atraso', 'Salida Anticipada']})
-    ws_bit.write(0, 7, "GUÍA OPERATIVA V75:", f_cabify)
+    ws_bit.write(0, 7, "GUÍA OPERATIVA V76:", f_cabify)
     ws_bit.write(1, 7, "INASISTENCIA: Marque el día de inicio del turno.")
 
     # ------------------------------------------------
     # HOJA 3: PLAN OPERATIVO
     # ------------------------------------------------
     ws_real = wb.add_worksheet("Plan_Operativo")
-    ws_real.write(5, 0, "Colaborador", f_cabify)
-    ws_real.write(5, 1, "Rol", f_cabify)
-    ws_real.freeze_panes(6, 2)
+    ws_real.write(6, 0, "Colaborador", f_cabify)
+    ws_real.write(6, 1, "Rol", f_cabify)
+    ws_real.freeze_panes(7, 2)
     
     col = 2
     d_map = {}
@@ -424,31 +425,33 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
         d_str = f"{días_es[d.weekday()]} {pd.to_datetime(d).strftime('%d-%b')}"
         
         ws_real.set_column(col, col, 1.5)
-        ws_real.write(5, col, "", f_sep_col)
+        ws_real.write(6, col, "", f_sep_col)
         
         ws_real.merge_range(0, col+1, 0, col+26, d_str, f_date)
-        ws_real.write(5, col+1, "Turno", f_cabify)
-        ws_real.write(5, col+2, "Lugar (Supervisor)", f_cabify)
+        ws_real.write(6, col+1, "Turno", f_cabify)
+        ws_real.write(6, col+2, "Lugar", f_cabify)
         
         d_map[d_iso] = col + 1
         
         for h in range(24):
-            ws_real.write(5, col+3+h, h, f_cabify)
+            # Escribir la franja horaria explícita
+            ws_real.write(6, col+3+h, h, f_cabify)
             col_idx = col+3+h
             col_let = xlsxwriter.utility.xl_col_to_name(col_idx)
             
-            f_ag = f'=COUNTIFS($B$7:$B$1000,"Agente",{col_let}7:{col_let}1000,"1")'
+            # Fórmulas de contadores
+            f_ag = f'=COUNTIFS($B$8:$B$1000,"Agente",{col_let}8:{col_let}1000,"1")'
             ws_real.write_formula(2, col_idx, f_ag, f_header_count)
-            f_an = f'=COUNTIFS($B$7:$B$1000,"Anfitrion",{col_let}7:{col_let}1000,"1")'
+            f_an = f'=COUNTIFS($B$8:$B$1000,"Anfitrion",{col_let}8:{col_let}1000,"1")'
             ws_real.write_formula(3, col_idx, f_an, f_header_count)
-            f_co = f'=COUNTIFS($B$7:$B$1000,"Coordinador",{col_let}7:{col_let}1000,"1")'
+            f_co = f'=COUNTIFS($B$8:$B$1000,"Coordinador",{col_let}8:{col_let}1000,"1")'
             ws_real.write_formula(4, col_idx, f_co, f_header_count)
-            f_su = f'=COUNTIFS($B$7:$B$1000,"Supervisor",{col_let}7:{col_let}1000,"1")'
+            f_su = f'=COUNTIFS($B$8:$B$1000,"Supervisor",{col_let}8:{col_let}1000,"1")'
             ws_real.write_formula(5, col_idx, f_su, f_header_count)
 
         col += 27
 
-    row = 6
+    row = 7
     curr_group = ""
     
     for _, p in df_staff_sorted.iterrows():
@@ -474,12 +477,9 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
             ws_real.write(row, c_start-1, "", f_sep_col) 
             
             subset = df[(df['Nombre']==n) & (df['Fecha']==d)]
-            
-            # V75 CORRECCIÓN: Verifica si realmente tiene horas de trabajo válidas este día
             is_working = not subset[subset['Hora'] != -1].empty
             
             if not is_working:
-                # Si es libre o no tiene turno, todo limpio (sin combobox)
                 t_raw_original = raw_shifts_map.get((n, d), "")
                 if "libre" in str(t_raw_original).lower(): t_raw_original = ""
                 ws_real.write(row, c_start, str(t_raw_original), f_base)
@@ -491,7 +491,6 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
                     formula = f'T(INDEX(Plan_Teorico!{col_plan_letter}:{col_plan_letter},MATCH("{key}",Plan_Teorico!$A:$A,0))) & ""'
                     ws_real.write_formula(row, c_start+2+h, formula, f_base)
             else:
-                # Si trabaja, se pone la data y los menús desplegables
                 t_raw_original = raw_shifts_map.get((n, d), "")
                 if "libre" in str(t_raw_original).lower(): t_raw_original = ""
                 try: lugar = subset[subset['Hora'] != -1].iloc[0]['Base_Diaria']
@@ -545,7 +544,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
         row += 1
 
     end_col_let = xlsxwriter.utility.xl_col_to_name(col-1)
-    data_range = f"D7:{end_col_let}{row}"
+    data_range = f"D8:{end_col_let}{row}"
     ws_real.conditional_format(data_range, {'type': 'cell', 'criteria': 'equal to', 'value': '"FALTA"', 'format': f_alert})
     ws_real.conditional_format(data_range, {'type': 'cell', 'criteria': 'equal to', 'value': '"INCIDENCIA"', 'format': f_alert})
     
@@ -558,7 +557,7 @@ def make_excel(df, raw_shifts_map, start_d, end_d):
     return out
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🚀 Generar Planificación V75 (Manual)"):
+if st.sidebar.button("🚀 Generar Planificación V76 (Manual)"):
     if not uploaded_sheets: st.error("Carga archivos.")
     elif not (start_d and end_d): st.error("Define fechas.")
     else:
@@ -573,5 +572,5 @@ if st.sidebar.button("🚀 Generar Planificación V75 (Manual)"):
             if full.empty: st.error("Sin datos válidos.")
             else:
                 final, raw_map = logic_engine_basic(full)
-                st.success("¡Listo! Descarga la Suite Operativa V75.")
-                st.download_button("📥 Descargar Suite (V75)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa_Manual.xlsx")
+                st.success("¡Listo! Descarga la Suite Operativa V76.")
+                st.download_button("📥 Descargar Suite (V76)", make_excel(final, raw_map, start_d, end_d), f"Planificacion_Operativa_Manual.xlsx")
