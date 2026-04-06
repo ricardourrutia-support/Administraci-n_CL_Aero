@@ -1,3 +1,6 @@
+
+Copiar
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -539,15 +542,16 @@ def generate_excel(df_grid: pd.DataFrame, date_start: date, date_end: date) -> i
     dates = [d for d in dates if date_start <= d <= date_end]
  
     # Clasificar Agentes y Anfitriones como Diurno/Nocturno
-    # según la mayoría de sus turnos (start_h < 14 = diurno, >= 14 = nocturno)
+    # Nocturno = turno que cruza medianoche (start_h >= 18)
+    # Se clasifica según la mayoría de sus turnos
     shift_class = {}
     for rol_check in ("Agente", "Anfitrión"):
         df_rol = df_grid[(df_grid["Rol"] == rol_check) & (df_grid["Start_H"] >= 0)]
         for name, grp in df_rol.groupby("Nombre"):
             starts = grp.drop_duplicates(subset=["Fecha"])["Start_H"]
-            am = (starts < 14).sum()
-            pm = (starts >= 14).sum()
-            shift_class[name] = "Diurno" if am >= pm else "Nocturno"
+            diurnos = (starts < 18).sum()
+            nocturnos = (starts >= 18).sum()
+            shift_class[name] = "Diurno" if diurnos >= nocturnos else "Nocturno"
  
     # Ordenar personas: rol > sub-tipo (diurno primero) > nombre
     role_order = {"Agente": 1, "Anfitrión": 2, "Coordinador": 3, "Supervisor": 4}
@@ -711,43 +715,47 @@ def generate_excel(df_grid: pd.DataFrame, date_start: date, date_end: date) -> i
             working_hours = subset[subset["Hora"] != -1]
             is_working = not working_hours.empty
  
-            # Determinar Shift_Date para esta persona/fecha
-            # Si hay horas de madrugada de un nocturno del día anterior,
-            # el Shift_Date será el día anterior
-            shift_date_for_this_block = d
+            # Separar horas según Shift_Date:
+            #   - madrugada_hours: Shift_Date < d (cola del turno de ayer)
+            #   - today_hours: Shift_Date == d (turno de hoy)
             if is_working:
-                shift_dates_in_block = working_hours["Shift_Date"].unique()
-                # Si algún Shift_Date es del día anterior, es un nocturno
-                for sd in shift_dates_in_block:
-                    if isinstance(sd, datetime):
-                        sd = sd.date()
-                    if sd < d:
-                        shift_date_for_this_block = sd
-                        break
- 
-            # Escribir la columna ShiftLugar como fórmula que referencia
-            # la columna Lugar del Shift_Date
-            if shift_date_for_this_block != d and shift_date_for_this_block in date_col_map:
-                # Nocturno: referenciar Lugar del día anterior
-                ref_lugar_col = date_col_map[shift_date_for_this_block] + 1
-                ref_lugar_letter = xlsxwriter.utility.xl_col_to_name(ref_lugar_col)
-                ws.write_formula(row, c_start + 2,
-                    f'={ref_lugar_letter}{row + 1}', fmt_hidden)
+                working_hours = working_hours.copy()
+                working_hours["Shift_Date"] = pd.to_datetime(working_hours["Shift_Date"]).dt.date
+                madrugada_hours = working_hours[working_hours["Shift_Date"] < d]
+                today_hours = working_hours[working_hours["Shift_Date"] == d]
             else:
-                # Normal: referenciar Lugar de este mismo día
-                lugar_letter = xlsxwriter.utility.xl_col_to_name(c_start + 1)
-                ws.write_formula(row, c_start + 2,
-                    f'={lugar_letter}{row + 1}', fmt_hidden)
+                madrugada_hours = pd.DataFrame()
+                today_hours = pd.DataFrame()
+ 
+            has_today_shift = not today_hours.empty
+            has_madrugada = not madrugada_hours.empty
+ 
+            # Columna Turno: mostrar el turno de hoy (si existe)
+            if has_today_shift:
+                turno_raw = today_hours.iloc[0].get("Turno_Raw", "")
+                lugar = today_hours.iloc[0].get("Lugar", "Por Asignar")
+            elif has_madrugada and not has_today_shift:
+                # Solo tiene madrugada del día anterior, no turno propio hoy
+                turno_raw = f"(→{madrugada_hours.iloc[0].get('Turno_Raw', '')})"
+                lugar = ""
+            else:
+                turno_raw = ""
+                lugar = ""
+ 
+            # Columna ShiftLugar: siempre referencia el Lugar de ESTE bloque
+            lugar_letter = xlsxwriter.utility.xl_col_to_name(c_start + 1)
+            ws.write_formula(row, c_start + 2,
+                f'={lugar_letter}{row + 1}', fmt_hidden)
  
             if not is_working:
-                # Día libre — dropdown HE en cada hora
-                turno_raw = ""
+                # Día libre
                 libre_rows = subset[subset["Hora"] == -1]
+                libre_txt = ""
                 if not libre_rows.empty:
                     tr = libre_rows.iloc[0]["Tarea"]
-                    turno_raw = tr if tr != "Libre" else ""
+                    libre_txt = tr if tr != "Libre" else ""
  
-                ws.write(row, c_start, turno_raw if turno_raw else "Libre", fmt["libre"])
+                ws.write(row, c_start, libre_txt if libre_txt else "Libre", fmt["libre"])
                 ws.write(row, c_start + 1, "", fmt["libre"])
                 for h in range(24):
                     cell_col = c_start + 3 + h
@@ -756,28 +764,25 @@ def generate_excel(df_grid: pd.DataFrame, date_start: date, date_end: date) -> i
                         "validate": "list", "source": hhee_range, "show_error": False
                     })
             else:
-                # Día de trabajo
-                turno_raw = working_hours.iloc[0].get("Turno_Raw", "")
-                lugar = working_hours.iloc[0].get("Lugar", "Por Asignar")
- 
                 ws.write(row, c_start, str(turno_raw), fmt["base"])
-                ws.write(row, c_start + 1, str(lugar), fmt["base"])
+                ws.write(row, c_start + 1, str(lugar) if has_today_shift else "", fmt["base"])
  
-                # Dropdown de lugar
-                if rol == "Agente":
-                    ws.data_validation(row, c_start + 1, row, c_start + 1, {
-                        "validate": "list", "source": lugar_ag_range, "show_error": False
-                    })
-                elif rol == "Anfitrión":
-                    ws.data_validation(row, c_start + 1, row, c_start + 1, {
-                        "validate": "list", "source": lugar_anf_range, "show_error": False
-                    })
-                elif rol in ("Coordinador", "Supervisor"):
-                    ws.data_validation(row, c_start + 1, row, c_start + 1, {
-                        "validate": "list", "source": lugar_cs_range, "show_error": False
-                    })
+                # Dropdown de lugar (solo si tiene turno propio hoy)
+                if has_today_shift:
+                    if rol == "Agente":
+                        ws.data_validation(row, c_start + 1, row, c_start + 1, {
+                            "validate": "list", "source": lugar_ag_range, "show_error": False
+                        })
+                    elif rol == "Anfitrión":
+                        ws.data_validation(row, c_start + 1, row, c_start + 1, {
+                            "validate": "list", "source": lugar_anf_range, "show_error": False
+                        })
+                    elif rol in ("Coordinador", "Supervisor"):
+                        ws.data_validation(row, c_start + 1, row, c_start + 1, {
+                            "validate": "list", "source": lugar_cs_range, "show_error": False
+                        })
  
-                # Determinar rango de dropdown de tareas según rol
+                # Dropdown de tareas según rol
                 task_range_for_role = {
                     "Agente": task_ag_range,
                     "Anfitrión": task_anf_range,
@@ -786,10 +791,10 @@ def generate_excel(df_grid: pd.DataFrame, date_start: date, date_end: date) -> i
  
                 # Escribir tareas hora a hora
                 for h in range(24):
-                    cell_col = c_start + 3 + h  # +3 por Turno, Lugar, ShiftLugar
+                    cell_col = c_start + 3 + h
                     h_data = working_hours[working_hours["Hora"] == h]
                     if h_data.empty:
-                        # Hora fuera del turno → dropdown HE
+                        # Hora fuera de turno → dropdown HE
                         ws.write(row, cell_col, "", fmt["base"])
                         ws.data_validation(row, cell_col, row, cell_col, {
                             "validate": "list", "source": hhee_range, "show_error": False
@@ -799,7 +804,6 @@ def generate_excel(df_grid: pd.DataFrame, date_start: date, date_end: date) -> i
                         cell_fmt = task_colors.get(tarea, fmt["base"])
                         ws.write(row, cell_col, tarea, cell_fmt)
  
-                        # Dropdown de tarea (excepto Supervisores)
                         if task_range_for_role:
                             ws.data_validation(row, cell_col, row, cell_col, {
                                 "validate": "list", "source": task_range_for_role,
@@ -1103,4 +1107,3 @@ if st.sidebar.button("🚀 Generar Plan Operativo", type="primary", use_containe
                         type="primary",
                         use_container_width=True,
                     )
- 
