@@ -1,0 +1,1496 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><base target="_top">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{--bg:#ffffff;--panel:#ffffff;--panel2:#f6f1fc;--line:#e9e3f4;--ink:#2b2440;--mut:#8c84a3;
+    --acc:#6c2eb9;--acc2:#b98be8;--comp:#6c2eb9;--excl:#f2495c;--dia:#b98be8;--noche:#6c2eb9;--sin:#b9b3c9;
+    --ok:#16b79a;--bad:#f2495c;--meta:#6c2eb9;}
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans',sans-serif;
+    background-image:radial-gradient(900px 420px at 85% -12%, #f1e9fb 0%, transparent 60%);}
+  .wrap{max-width:1280px;margin:0 auto;padding:22px 20px 70px}
+  h1{font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:30px;letter-spacing:-.02em;margin:0;color:var(--acc)}
+  .sub{color:var(--mut);font-size:13px;margin-top:4px}
+  .kick{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+  .bar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:18px 0 6px;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+  .nav{display:flex;gap:8px;margin:18px 0 4px;border-bottom:2px solid var(--line);flex-wrap:wrap}
+  .tab{background:transparent;border:none;border-bottom:3px solid transparent;border-radius:0;
+    padding:10px 16px;font-weight:600;color:var(--mut);font-size:15px;margin-bottom:-2px}
+  .tab:hover{color:var(--acc);border-color:transparent}
+  .tab.active{color:var(--acc);border-bottom-color:var(--acc)}
+  .fld{display:flex;flex-direction:column;gap:4px}
+  .fld label{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
+  input,select,button,textarea{font-family:inherit;font-size:14px;background:var(--panel2);color:var(--ink);
+    border:1px solid var(--line);border-radius:9px;padding:8px 10px;outline:none}
+  button{cursor:pointer} button:hover{border-color:var(--acc)}
+  .btn-acc{background:var(--acc);color:#fff;border:none;font-weight:600}
+  .btn-acc:hover{background:#5a259c}
+  .seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+  .seg button{background:transparent;border:none;border-radius:8px;padding:7px 16px;font-weight:600;color:var(--mut);font-size:14px}
+  .seg button:hover{border-color:transparent;color:var(--acc)}
+  .seg button.on{background:var(--acc);color:#fff}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;position:relative;overflow:hidden;box-shadow:0 6px 18px rgba(108,46,185,.06)}
+  .card .k{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
+  .card .v{font-family:'Bricolage Grotesque',sans-serif;font-weight:800;font-size:25px;margin-top:6px}
+  .card .s{font-size:12px;color:var(--mut);margin-top:4px}
+  .card .tag{position:absolute;right:14px;top:14px;width:10px;height:10px;border-radius:50%}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:16px;box-shadow:0 6px 18px rgba(108,46,185,.05)}
+  .panel h2{font-family:'Bricolage Grotesque',sans-serif;font-weight:700;font-size:17px;margin:0 0 6px;color:var(--acc);
+    display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:7px 9px;text-align:right;border-bottom:1px solid var(--line)}
+  table.tramo td,table.tramo th{text-align:left}
+  table.tramo input{padding:6px 8px;border-radius:8px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--mut);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  td.mono{font-family:'IBM Plex Mono',monospace}
+  tr.total td{border-top:2px solid var(--acc);font-weight:700;background:var(--panel2)}
+  .pill{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--mut)}
+  .pill.on{border-color:var(--acc);color:var(--acc)}
+  .mini{font-size:12px;padding:5px 10px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  .legend{display:flex;gap:14px;font-size:12px;color:var(--mut);margin:6px 0 8px}
+  .barfill{height:7px;border-radius:4px;background:var(--line);overflow:hidden}
+  .barfill>i{display:block;height:100%}
+  .err{background:#fdecee;border:1px solid #f3c0c6;color:#b42318;padding:12px 14px;border-radius:10px;margin-top:12px;font-size:13px}
+  .tag-rol{font-size:10px;padding:1px 7px;border-radius:20px;background:var(--panel2);border:1px solid var(--line);color:var(--mut)}
+  .scroll{max-height:330px;overflow:auto}
+  textarea{width:100%;min-height:120px;resize:vertical;font-family:'IBM Plex Mono',monospace;font-size:12px}
+  .switch{position:relative;display:inline-block;width:44px;height:24px;flex:0 0 auto}
+  .switch input{display:none}
+  .switch .slider{position:absolute;inset:0;background:var(--line);border-radius:24px;transition:.2s;cursor:pointer}
+  .switch .slider:before{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+  .switch input:checked + .slider{background:var(--acc)}
+  .switch input:checked + .slider:before{transform:translateX(20px)}
+  .avisoCfg{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--acc);
+    border-radius:10px;padding:10px 12px;font-size:13px;color:var(--ink);margin:10px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:8px">
+    <div><h1>Seguimiento Ventas y Performance · Aeropuerto</h1><div class="sub" id="rango">Cargando…</div></div>
+    <div class="pill" id="estado">·</div>
+  </div>
+
+  <div class="nav">
+    <button class="tab active" id="tabDash" onclick="showView('dash')">Dashboard e informes</button>
+    <button class="tab" id="tabCfg" onclick="showView('cfg')">Carga y configuración</button>
+    <button class="tab" id="tabAgente" onclick="showView('agente')">Vista agente</button>
+    <button class="tab" id="tabCoord" onclick="showView('coord')">Vista coordinador</button>
+    <button class="tab" id="tabAudit" onclick="showView('audit')" style="display:none">Auditoría supervisor</button>
+    <button class="tab" id="tabPeople" onclick="showView('people')" style="display:none">Vista People</button>
+  </div>
+
+  <div id="errbox"></div>
+  <div id="content" style="display:none">
+   <div id="viewDash">
+    <div class="bar">
+      <div class="fld"><label>Desde</label><input type="date" id="from"></div>
+      <div class="fld"><label>Hasta</label><input type="date" id="to"></div>
+      <div class="fld"><label>Servicio</label><select id="product">
+        <option value="todas">Todas</option><option value="compartida">Compartida</option><option value="exclusiva">Exclusiva</option></select></div>
+      <div class="fld"><label>Equipo</label><select id="team">
+        <option value="todos">Todos</option><option value="Dia">Diurno</option><option value="Noche">Nocturno</option></select></div>
+      <div class="fld"><label>&nbsp;</label><button class="btn-acc" onclick="actualizarTodo()">Actualizar</button></div>
+    </div>
+
+    <div class="cards" id="cards"></div>
+
+    <div class="panel">
+      <h2>Ventas por agente y avance de metas
+        <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span class="seg">
+            <button id="segTotal" class="on" onclick="setSegMeta('total')">Total</button>
+            <button id="segServicio" onclick="setSegMeta('servicio')">Compartida / Exclusiva</button>
+            <button id="segRound" onclick="setSegMeta('round')">One Way / Round</button>
+          </span>
+          <span class="pill" id="metaCfgPill">metas y tramos del periodo</span>
+        </span>
+      </h2>
+      <div class="sub" style="margin:-2px 0 8px" id="metaCfgNota"></div>
+      <div class="legend"><span><span class="dot" style="background:var(--acc)"></span>Avance grupal</span></div>
+      <div id="grupoMeta"></div>
+      <div class="legend" style="margin-top:14px" id="metaLegend"></div>
+      <canvas id="chartMeta" height="120"></canvas>
+      <div class="legend" style="margin-top:16px"><span><span class="dot" style="background:var(--noche)"></span>Total por coordinador</span><span><span class="dot" style="background:var(--meta)"></span>Meta por coordinador</span></div>
+      <canvas id="chartMetaCoord" height="90"></canvas>
+    </div>
+
+    <div class="panel">
+      <h2>Ventas por día
+        <span style="display:inline-flex;gap:6px">
+          <span class="pill">monto diario</span>
+          <button class="mini" onclick="bajar('diaria')">CSV</button>
+        </span>
+      </h2>
+      <canvas id="chartDia" height="92"></canvas>
+      <div class="sub" style="margin-top:6px">Monto de ventas por fecha en el periodo seleccionado.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Ventas por franja horaria
+        <span style="display:inline-flex;gap:6px">
+          <span class="pill">compartida / exclusiva</span>
+          <button class="mini" onclick="bajar('franja')">CSV</button>
+        </span>
+      </h2>
+      <div class="legend"><span><span class="dot" style="background:var(--comp)"></span>Compartida</span><span><span class="dot" style="background:var(--excl)"></span>Exclusiva</span></div>
+      <canvas id="chart" height="92"></canvas>
+    </div>
+
+    <div class="panel">
+      <h2>Ventas promedio por día de la semana
+        <span style="display:inline-flex;gap:6px">
+          <span class="pill" id="semSub">promedio por día</span>
+          <button class="mini" onclick="bajar('semana')">CSV</button>
+        </span>
+      </h2>
+      <canvas id="chartSemana" height="88"></canvas>
+      <div class="sub" style="margin-top:6px">Promedio = ventas totales de ese día ÷ cantidad de ese día en el periodo seleccionado.</div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>Ejecutivos
+          <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <span class="seg">
+              <button id="ejModoPerf" class="on" onclick="setModoEjec('perf')">Resumen Performance</button>
+              <button id="ejModoVta" onclick="setModoEjec('ventas')">Resumen Ventas</button>
+            </span>
+            <select id="ejOrden" class="mini" onchange="setOrdenEjec()" style="min-width:190px">
+              <option value="ventas">Ordenar: Ventas ↓</option>
+              <option value="round">Ordenar: Q Round ↓</option>
+              <option value="montoRound">Ordenar: Monto Round ↓</option>
+              <option value="comision">Ordenar: Comisión real ↓</option>
+              <option value="nombre">Ordenar: Nombre A-Z</option>
+            </select>
+            <button class="mini" onclick="bajar('ejecutivos')">CSV completo</button>
+          </span>
+        </h2>
+        <div class="sub" style="margin:-2px 0 8px"><b>Q Round</b> = ventas de ida y vuelta (un par de viajes = una venta). <b>Q One Way</b> = ventas normales. El <b>CSV completo</b> trae todos los atributos de los dos modos, sin importar cuál estés viendo.</div>
+        <div class="scroll" id="tEjecBox"></div>
+      </div>
+      <div class="panel">
+        <h2>Coordinadores <span style="display:flex;gap:6px"><span class="pill">comisión por franja</span><button class="mini" onclick="bajar('coordinador')">CSV</button></span></h2>
+        <div class="sub" style="margin:-2px 0 8px">Reparto de la venta de cada franja activa (50/50 si hay 2).</div>
+        <table id="tCoord"><thead><tr><th>Coordinador</th><th>Día</th><th>Noche</th><th>Total</th><th>Viajes</th><th>Turnos</th><th>Prom. franja</th><th>Avance</th><th>% Com.</th><th>Comisión</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Desempeño de agentes
+        <span style="display:inline-flex;gap:6px;align-items:center">
+          <span class="pill" id="perfStamp">sin datos</span>
+          <button class="mini" onclick="actualizarPerf()" id="btnPerf">Actualizar desde Tableau</button>
+          <button class="mini" onclick="bajar('desempeno')">CSV</button>
+        </span>
+      </h2>
+      <div class="sub" style="margin:-2px 0 8px" id="perfNota">Promedios del periodo seleccionado (crosstab Performance Support).</div>
+      <div class="scroll"><table id="tPerf"><thead><tr><th>Agente</th><th>Rol</th><th>Tickets</th><th>% CSAT</th><th>NPS</th><th>% FIRT ≤24h</th><th>% FURT ≤120h</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="panel">
+      <h2>Informes de desempeño
+        <span class="pill" id="audStamp">auditorías: —</span>
+      </h2>
+      <div class="sub" style="margin:-2px 0 10px">PDF estilo Cabify (se descarga directo). El <b>Resumen</b> trae Ventas · Ida y vuelta · Nota Auditoría · % Registros Correctos por agente. El <b>Detalle</b> agrega, por agente, sus ventas, registros incorrectos y auditorías (con N° de ticket). Nota: la <b>Nota Auditoría</b> promedia las auditorías disponibles del agente (no se filtra por el periodo de ventas, porque QA audita con desfase); el resto sí usa el periodo seleccionado.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <button class="btn-acc" onclick="pdfResumen()" id="btnResumen">Descargar Resumen por agente (PDF)</button>
+        <select id="agSel" style="min-width:200px"><option value="">Todos los agentes</option></select>
+        <button class="btn-acc" onclick="pdfDetalle()" id="btnDetalle">Descargar Detalle por agente (PDF)</button>
+        <span class="sub" id="pdfMsg"></span>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h2>Otras ventas <span style="display:flex;gap:6px"><span class="pill">supervisor · anfitrión · otro</span><button class="mini" onclick="bajar('otras')">CSV</button></span></h2>
+        <table id="tOtras"><thead><tr><th>Colaborador</th><th>Rol</th><th>Ventas</th><th>Viajes</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="panel">
+        <h2>Correos mal ingresados <span style="display:flex;gap:6px"><span class="pill">ds_user_email · compartida</span><button class="mini" onclick="bajar('correos')">CSV detalle</button></span></h2>
+        <div class="scroll"><table id="tCorreos"><thead><tr><th>Ejecutivo</th><th>Compartidas</th><th>Malos</th><th>% OK</th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Resumen del periodo <span class="pill">comisiones y cumplimiento</span></h2>
+      <div class="cards" id="resumenCards"></div>
+    </div>
+   </div><!-- /viewDash -->
+
+   <div id="viewCfg" style="display:none">
+    <div class="panel">
+      <h2>Periodo de configuración <span class="pill on" id="cfgVigencia">—</span></h2>
+      <div class="sub" style="margin:-2px 0 10px">Las metas y los tramos de comisión se guardan <b>por mes</b> y rigen <b>hacia adelante</b>: un periodo sin configuración propia usa la del último mes configurado antes de él. Así, fijar las metas de un mes nuevo <b>no altera</b> cómo se calculan los meses anteriores.</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+        <div class="fld"><label>Periodo a configurar</label><input type="month" id="cfgPeriodo" onchange="cargarConfigPeriodo()"></div>
+        <div class="fld"><label>&nbsp;</label><button onclick="cargarConfigPeriodo()">Cargar periodo</button></div>
+        <div class="fld"><label>&nbsp;</label><button onclick="copiarDesdeVigente()" id="btnCopiar">Copiar la configuración vigente a este periodo</button></div>
+        <div class="fld"><label>&nbsp;</label><button onclick="borrarConfigDelPeriodo()" id="btnBorrarCfg">Borrar configuración propia</button></div>
+        <span class="sub" id="cfgEstado"></span>
+      </div>
+      <div class="avisoCfg" id="cfgAviso">—</div>
+      <div class="sub" id="cfgPeriodosList"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Meta de venta <span class="pill" id="metaPeriodoPill">mensual</span></h2>
+      <div class="fld"><label>Meta mensual total (CLP) — grupal (agentes y coordinadores)</label>
+        <input type="number" id="metaGrupo" placeholder="ej. 80000000"></div>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <button class="btn-acc" onclick="guardarMetas()">Guardar meta del periodo</button>
+        <span class="sub" id="metaMsg"></span>
+      </div>
+      <div class="sub" style="margin-top:8px">La meta individual de agentes y coordinadores se define abajo, en los tramos de comisión: corresponde al inicio del <b>Tramo 5</b>.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Visibilidad de comisión <span class="pill">vista de agente / coordinador</span></h2>
+      <div class="sub" style="margin:-2px 0 12px">Controla si cada agente o coordinador ve el <b>monto de su comisión</b> en su propia vista. Si está apagado, verá “Por definir” en lugar del monto. Esta configuración es global (no depende del periodo).</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer"><span class="switch"><input type="checkbox" id="swComAg"><span class="slider"></span></span> <span>Mostrar comisión a los <b>agentes</b> en su vista</span></label>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer"><span class="switch"><input type="checkbox" id="swComCo"><span class="slider"></span></span> <span>Mostrar comisión a los <b>coordinadores</b> en su vista</span></label>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <button class="btn-acc" onclick="guardarMostrarComision()">Guardar</button>
+        <span class="sub" id="comVisMsg"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Tramos de comisión <span class="pill" id="tramosPeriodoPill">meta individual = inicio del Tramo 5</span></h2>
+      <div class="sub" style="margin:-2px 0 12px">Define los límites de venta y el % de comisión por tramo <b>para el periodo seleccionado arriba</b>. El último tramo es "En adelante" (sin límite superior).</div>
+      <div style="font-weight:700;color:var(--acc);margin:6px 0">Coordinadores</div>
+      <div id="tramosCoord" class="scroll"></div>
+      <div style="font-weight:700;color:var(--acc);margin:16px 0 6px">Ejecutivos</div>
+      <div id="tramosEjec" class="scroll"></div>
+      <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
+        <button class="btn-acc" onclick="guardarTramos()">Guardar tramos del periodo</button>
+        <span class="sub" id="tramosMsg"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Supervisores que auditan incidencias <span class="pill">correos autorizados</span></h2>
+      <div class="sub" style="margin:-2px 0 10px">Correos de supervisores activos autorizados a auditar y sobrescribir en la vista del agente las incidencias que descuentan (cambiar a “No descuenta” + comentario). Uno por línea.</div>
+      <textarea id="supEmails" placeholder="supervisor1@cabify.com&#10;supervisor2@cabify.com"></textarea>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+        <button class="btn-acc" onclick="guardarSupervisores()">Guardar supervisores</button>
+        <span class="sub" id="supMsg"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Base de colaboradores activos (BUK) <span class="pill" id="maeStamp">sin sincronizar</span></h2>
+      <div class="sub" style="margin:-2px 0 10px">
+        <b>Actualizar datos maestros:</b> cargue la planilla de colaboradores activos disponible en BUK
+        para sincronizar automáticamente (archivo .xls, hoja "Trabajador"). Con esto la app reconoce a los
+        nuevos colaboradores (rol, nombre completo y supervisor) sin editar el Roster.
+      </div>
+      <input type="file" id="fileMaestros" accept=".xls,.xlsx" style="display:none" onchange="leerPlanilla(this)">
+      <div style="display:flex;gap:10px;align-items:center">
+        <button class="btn-acc" onclick="document.getElementById('fileMaestros').click()" id="btnMae">Cargar planilla…</button>
+        <span class="sub" id="maeMsg"></span>
+      </div>
+    </div>
+   </div><!-- /viewCfg -->
+
+   <div id="viewAgente" style="display:none">
+    <div class="panel">
+      <div class="kick">VISTA POR AGENTE · <span id="agMesLabel">mes en curso</span></div>
+      <div class="sub" style="margin:2px 0 12px">Selecciona el periodo y un agente para ver sus indicadores. Solo un agente a la vez.</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
+        <div class="fld">
+          <label>Periodo</label>
+          <div class="seg" id="agSeg">
+            <button id="periodoActual" class="on" onclick="setPeriodoAgente('actual')">Mes en curso</button>
+            <button id="periodoAnterior" onclick="setPeriodoAgente('anterior')">Mes anterior</button>
+          </div>
+        </div>
+        <div class="fld">
+          <label>Agente</label>
+          <select id="agViewSel" onchange="renderAgente()" style="min-width:260px">
+            <option value="">— Selecciona un agente —</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div id="agResultado"></div>
+   </div><!-- /viewAgente -->
+
+   <div id="viewCoord" style="display:none">
+    <div class="panel">
+      <div class="kick">VISTA POR COORDINADOR · <span id="coMesLabel">mes en curso</span></div>
+      <div class="sub" style="margin:2px 0 12px">Selecciona el periodo y un coordinador para ver sus indicadores. Solo un coordinador a la vez.</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
+        <div class="fld">
+          <label>Periodo</label>
+          <div class="seg" id="coSeg">
+            <button id="coPeriodoActual" class="on" onclick="setPeriodoCoord('actual')">Mes en curso</button>
+            <button id="coPeriodoAnterior" onclick="setPeriodoCoord('anterior')">Mes anterior</button>
+          </div>
+        </div>
+        <div class="fld">
+          <label>Coordinador</label>
+          <select id="coViewSel" onchange="renderCoordinador()" style="min-width:260px">
+            <option value="">— Selecciona un coordinador —</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div id="coResultado"></div>
+   </div><!-- /viewCoord -->
+
+   <div id="viewAudit" style="display:none">
+    <div class="panel">
+      <div class="kick">AUDITORÍA SUPERVISOR · <span id="auMesLabel">mes en curso</span></div>
+      <div class="sub" style="margin:2px 0 12px">Registra y audita incidencias de asistencia. Lo que registres aquí <b>manda sobre el biométrico</b> (BSC). Un registro por día por agente.</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end">
+        <div class="fld">
+          <label>Periodo</label>
+          <div class="seg" id="auSeg">
+            <button id="auPerActual" class="on" onclick="setPeriodoAudit('actual')">Mes en curso</button>
+            <button id="auPerAnterior" onclick="setPeriodoAudit('anterior')">Mes anterior</button>
+          </div>
+        </div>
+        <div class="fld">
+          <label>Agente</label>
+          <select id="auAgSel" onchange="renderAudit()" style="min-width:260px">
+            <option value="">— Selecciona un agente —</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div id="auResultado"></div>
+   </div><!-- /viewAudit -->
+
+   <div id="viewPeople" style="display:none">
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:8px">
+        <div>
+          <div class="kick">VISTA PEOPLE · INCIDENCIAS POR PERIODO</div>
+          <div class="sub" style="margin:2px 0 0">Resumen y detalle de incidencias de los agentes en el periodo. Las fechas son editables (por defecto del 25 al 25).</div>
+        </div>
+        <span class="pill" id="pEstado">·</span>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;margin-top:12px">
+        <div class="fld"><label>Desde</label><input type="date" id="pDesde"></div>
+        <div class="fld"><label>Hasta</label><input type="date" id="pHasta"></div>
+        <div class="fld"><label>&nbsp;</label><button class="btn-acc" onclick="cargarPeople()">Cargar</button></div>
+        <div class="fld"><label>&nbsp;</label><button onclick="exportPeopleExcel()">Exportar a Excel</button></div>
+      </div>
+    </div>
+    <div id="pResultado"></div>
+   </div><!-- /viewPeople -->
+  </div>
+</div>
+
+<script>
+var DATA=null, chart=null, chartMeta=null, chartMetaCoord=null, chartSemana=null, chartDia=null;
+var ACCESO=null, CFG=null;
+function limpiaMsg(m){ return String(m||'').replace(/^Exception:\s*/,'').replace(/^Error:\s*/,''); }
+function panelError(titulo, txt){
+  return '<div class="err"><b>'+titulo+'</b><br>'+txt+'</div>';
+}
+var CLP=function(n){return '$'+(Math.round(n||0)).toLocaleString('es-CL');};
+function p2(n){return (n<10?'0':'')+n;}
+function firstDay(){var d=new Date();return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-01';}
+function today(){var d=new Date();return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate());}
+function ymHoy(){var d=new Date();return d.getFullYear()+'-'+p2(d.getMonth()+1);}
+document.getElementById('from').value=firstDay();
+document.getElementById('to').value=today();
+
+function params(){return {from:document.getElementById('from').value,to:document.getElementById('to').value,
+  product:document.getElementById('product').value,team:document.getElementById('team').value,incluirAusentismo:true};}
+
+function showView(v){
+  var map={dash:'viewDash',cfg:'viewCfg',agente:'viewAgente',coord:'viewCoord',audit:'viewAudit',people:'viewPeople'};
+  Object.keys(map).forEach(function(k){ document.getElementById(map[k]).style.display=(k===v)?'block':'none'; });
+  document.getElementById('tabDash').classList.toggle('active',v==='dash');
+  document.getElementById('tabCfg').classList.toggle('active',v==='cfg');
+  document.getElementById('tabAgente').classList.toggle('active',v==='agente');
+  document.getElementById('tabCoord').classList.toggle('active',v==='coord');
+  document.getElementById('tabAudit').classList.toggle('active',v==='audit');
+  document.getElementById('tabPeople').classList.toggle('active',v==='people');
+  if(v==='cfg' && !CFG){ if(!document.getElementById('cfgPeriodo').value) document.getElementById('cfgPeriodo').value=ymHoy(); cargarConfigPeriodo(); }
+  if(v==='agente' && !AG_CACHE[AG_PER]) cargarAgentes(AG_PER);
+  if(v==='coord' && !CO_CACHE[CO_PER]) cargarCoordinadores(CO_PER);
+  if(v==='audit' && !AU_CACHE[AU_PER]) cargarAuditAgentes(AU_PER);
+  if(v==='people'){ if(!document.getElementById('pDesde').value) peopleDefaults(); if(!PEOPLE_DATA) cargarPeople(); }
+  window.scrollTo(0,0);
+}
+
+// -------------------------- ARRANQUE / ACCESO ------------------------------
+function iniciar(){
+  google.script.run
+    .withSuccessHandler(function(acc){ ACCESO=acc||{esAgente:false,esCoordinador:false,identificado:true}; aplicarAcceso(); })
+    .withFailureHandler(function(){ ACCESO={esAgente:false,esCoordinador:false,identificado:false}; aplicarAcceso(); })
+    .getAccessContext();
+}
+function aplicarAcceso(){
+  // Si la cuenta no pudo leer los datos (permisos de la publicacion), mostrar
+  // un mensaje claro y no seguir intentando cargar nada.
+  if(ACCESO && ACCESO.errorPermisos){
+    document.getElementById('tabDash').style.display='none';
+    document.getElementById('tabCfg').style.display='none';
+    document.getElementById('tabAgente').style.display='none';
+    document.getElementById('tabCoord').style.display='none';
+    document.getElementById('tabAudit').style.display='none';
+    document.getElementById('tabPeople').style.display='none';
+    document.getElementById('estado').textContent='Sin acceso a datos';
+    document.getElementById('rango').textContent=ACCESO.email||'';
+    document.getElementById('errbox').innerHTML=
+      '<div class="panel" style="text-align:center;padding:34px 22px">'+
+      '<div style="font-size:34px;margin-bottom:8px">&#128274;</div>'+
+      '<div style="font-family:\'Bricolage Grotesque\',sans-serif;font-weight:700;font-size:18px;color:var(--acc);margin-bottom:6px">No pudimos cargar tus datos</div>'+
+      '<div class="sub" style="max-width:560px;margin:0 auto">'+limpiaMsg(ACCESO.mensaje||'Tu cuenta no tiene permisos para leer los datos de la app.')+'</div>'+
+      '<div class="sub" style="margin-top:10px">Si el problema persiste, contacta al administrador del tablero.</div>'+
+      '</div>';
+    return;
+  }
+  var esAg=ACCESO&&ACCESO.esAgente, esCo=ACCESO&&ACCESO.esCoordinador;
+  if(esAg || esCo){
+    document.getElementById('tabDash').style.display='none';
+    document.getElementById('tabCfg').style.display='none';
+    document.getElementById('tabAudit').style.display='none';
+    document.getElementById('tabPeople').style.display='none';
+    document.getElementById('content').style.display='block';
+    document.getElementById('estado').textContent=ACCESO.nombre||(esAg?'Agente':'Coordinador');
+    if(esAg){
+      document.getElementById('tabCoord').style.display='none';
+      document.getElementById('rango').textContent='Acceso: '+(ACCESO.nombre||ACCESO.email||'agente')+' · vista personal';
+      showView('agente');
+    } else {
+      document.getElementById('tabAgente').style.display='none';
+      document.getElementById('rango').textContent='Acceso: '+(ACCESO.nombre||ACCESO.email||'coordinador')+' · vista personal';
+      showView('coord');
+    }
+  } else {
+    // no restringido: la pestaña de auditoría solo para supervisores de la lista
+    document.getElementById('tabAudit').style.display = (ACCESO && ACCESO.esSupervisor) ? '' : 'none';
+    document.getElementById('tabPeople').style.display = '';
+    cargar();
+  }
+}
+
+function actualizarTodo(){
+  // fuerza lectura fresca: invalida el caché de datos y recarga
+  document.getElementById('estado').textContent='Actualizando…';
+  google.script.run.withSuccessHandler(function(){ cargar(); })
+    .withFailureHandler(function(){ cargar(); }).resetCacheDatos();
+}
+function cargar(){
+  document.getElementById('estado').textContent='Cargando…';
+  document.getElementById('errbox').innerHTML='';
+  google.script.run
+    .withSuccessHandler(function(d){DATA=d;document.getElementById('content').style.display='block';
+      document.getElementById('estado').textContent='Actualizado';
+      document.getElementById('rango').textContent='Rango: '+d.rango.from+'  →  '+d.rango.to+(d.corte&&d.corte.ultima?('   ·   datos hasta última venta '+d.corte.ultima+' ('+d.corte.viajes+' viajes)'):'');
+      document.getElementById('supEmails').value=(d.supervisores||[]).join('\n');
+      var _mc=d.mostrarComision||{agentes:false,coordinadores:false};
+      document.getElementById('swComAg').checked=!!_mc.agentes;
+      document.getElementById('swComCo').checked=!!_mc.coordinadores;
+      render();})
+    .withFailureHandler(function(e){document.getElementById('estado').textContent='Error';
+      document.getElementById('errbox').innerHTML=panelError('No se pudo cargar el dashboard.', limpiaMsg(e.message));})
+    .getDashboard(params());
+}
+
+// ================= CONFIGURACIÓN POR PERIODO (metas y tramos) ==============
+function cargarConfigPeriodo(){
+  var ym=document.getElementById('cfgPeriodo').value||ymHoy();
+  document.getElementById('cfgEstado').textContent='Cargando…';
+  google.script.run.withSuccessHandler(function(r){ CFG=r; document.getElementById('cfgEstado').textContent=''; pintarConfig(); })
+    .withFailureHandler(function(e){ document.getElementById('cfgEstado').textContent='Error: '+limpiaMsg(e.message); })
+    .getConfigPeriodo(ym);
+}
+function origenTxt(o, desdeLabel){
+  if(o==='propia')   return 'configuración propia de este periodo';
+  if(o==='heredada') return 'heredada de '+(desdeLabel||'un periodo anterior');
+  if(o==='inicial')  return 'valores iniciales del sistema (aún no se guarda ninguna configuración)';
+  return 'sin definir';
+}
+function pintarConfig(){
+  if(!CFG) return;
+  document.getElementById('cfgPeriodo').value=CFG.ym;
+  document.getElementById('cfgVigencia').textContent=CFG.label;
+  document.getElementById('metaPeriodoPill').textContent='periodo: '+CFG.label;
+  document.getElementById('tramosPeriodoPill').textContent='periodo: '+CFG.label;
+  document.getElementById('metaGrupo').value=CFG.metas.grupo||'';
+  document.getElementById('tramosCoord').innerHTML=tramoTabla('coord',CFG.tramos.coord);
+  document.getElementById('tramosEjec').innerHTML=tramoTabla('ejec',CFG.tramos.ejec);
+  var propia=(CFG.metas.origen==='propia'||CFG.tramos.origen==='propia');
+  document.getElementById('cfgVigencia').className='pill '+(propia?'on':'');
+  document.getElementById('cfgAviso').innerHTML=
+    'Estás editando <b>'+CFG.label+'</b>.<br>'+
+    'Meta grupal: <b>'+origenTxt(CFG.metas.origen, CFG.metas.desdeLabel)+'</b>'+(CFG.metas.grupo?(' · '+CLP(CFG.metas.grupo)):'')+'<br>'+
+    'Tramos de comisión: <b>'+origenTxt(CFG.tramos.origen, CFG.tramos.desdeLabel)+'</b> · meta por agente '+CLP(CFG.metaAgente)+' · meta por coordinador '+CLP(CFG.metaCoordinador)+'<br>'+
+    '<span class="sub">Al guardar, los valores quedan fijos para este periodo y para los siguientes que no tengan configuración propia. Los periodos anteriores no se modifican.</span>';
+  var ps=CFG.periodos||[];
+  document.getElementById('cfgPeriodosList').innerHTML = ps.length
+    ? ('Periodos con configuración propia: '+ps.map(function(x){
+        var q=[]; if(x.metas)q.push('meta'); if(x.tramos)q.push('tramos');
+        return '<span class="pill'+(x.ym===CFG.ym?' on':'')+'" style="margin-right:6px">'+x.label+' ('+q.join(' + ')+')</span>'; }).join(''))
+    : 'Todavía no hay periodos con configuración propia: se están usando los valores iniciales.';
+}
+function guardarMetas(){
+  var ym=document.getElementById('cfgPeriodo').value||ymHoy();
+  document.getElementById('metaMsg').textContent='Guardando…';
+  google.script.run.withSuccessHandler(function(){
+      document.getElementById('metaMsg').textContent='Guardado ✓ para '+(CFG?CFG.label:ym);
+      cargarConfigPeriodo(); cargar(); })
+    .withFailureHandler(function(e){document.getElementById('metaMsg').textContent='Error: '+limpiaMsg(e.message);})
+    .saveMetasPeriodo(ym, Number(document.getElementById('metaGrupo').value)||0);
+}
+function guardarTramos(){
+  var ym=document.getElementById('cfgPeriodo').value||ymHoy();
+  document.getElementById('tramosMsg').textContent='Guardando…';
+  google.script.run.withSuccessHandler(function(){
+      document.getElementById('tramosMsg').textContent='Guardado ✓ para '+(CFG?CFG.label:ym);
+      cargarConfigPeriodo(); cargar(); })
+    .withFailureHandler(function(e){document.getElementById('tramosMsg').textContent='Error: '+limpiaMsg(e.message);})
+    .saveTramosPeriodo(ym, leerTramos('coord'), leerTramos('ejec'));
+}
+function borrarConfigDelPeriodo(){
+  var ym=document.getElementById('cfgPeriodo').value||ymHoy();
+  if(!confirm('¿Borrar la configuración propia de este periodo? Volverá a heredar la del último periodo anterior configurado.')) return;
+  document.getElementById('cfgEstado').textContent='Borrando…';
+  google.script.run.withSuccessHandler(function(r){ CFG=r; document.getElementById('cfgEstado').textContent='Borrado ✓'; pintarConfig(); cargar(); })
+    .withFailureHandler(function(e){ document.getElementById('cfgEstado').textContent='Error: '+limpiaMsg(e.message); })
+    .borrarConfigPeriodo(ym);
+}
+function copiarDesdeVigente(){
+  var ym=document.getElementById('cfgPeriodo').value||ymHoy();
+  document.getElementById('cfgEstado').textContent='Copiando…';
+  google.script.run.withSuccessHandler(function(r){ CFG=r; document.getElementById('cfgEstado').textContent='Copiado ✓'; pintarConfig(); cargar(); })
+    .withFailureHandler(function(e){ document.getElementById('cfgEstado').textContent='Error: '+limpiaMsg(e.message); })
+    .copiarConfigPeriodo(ym, ym);
+}
+
+function tramoTabla(id, arr){
+  var h='<table class="tramo"><thead><tr><th>Tramo</th><th>Límite Inf. (CLP)</th><th>Límite Sup. (CLP)</th><th>% Com.</th></tr></thead><tbody>';
+  for(var i=0;i<arr.length;i++){ var t=arr[i], last=(i===arr.length-1);
+    var supCell;
+    if(!last){
+      supCell='<input type="number" data-t="'+id+'" data-i="'+i+'" data-k="sup" value="'+(t.sup==null?'':t.sup)+'" style="width:140px">';
+    } else {
+      var fijo=(t.sup!=null);
+      supCell=
+        '<select data-t="'+id+'" data-i="'+i+'" data-k="supmodo" onchange="toggleTope(this)" style="width:128px">'+
+          '<option value="inf"'+(!fijo?' selected':'')+'>En adelante</option>'+
+          '<option value="fijo"'+(fijo?' selected':'')+'>Monto tope</option>'+
+        '</select> '+
+        '<input type="number" data-t="'+id+'" data-i="'+i+'" data-k="sup" value="'+(t.sup==null?'':t.sup)+'" placeholder="tope CLP" style="width:120px;'+(fijo?'':'display:none')+'">';
+    }
+    h+='<tr><td><b>Tramo '+(i+1)+'</b></td>'+
+       '<td><input type="number" data-t="'+id+'" data-i="'+i+'" data-k="inf" value="'+(t.inf||0)+'" style="width:140px"></td>'+
+       '<td>'+supCell+'</td>'+
+       '<td><input type="number" step="0.1" data-t="'+id+'" data-i="'+i+'" data-k="pct" value="'+(t.pct||0)+'" style="width:64px"> %</td></tr>';
+  }
+  return h+'</tbody></table>';
+}
+function toggleTope(sel){
+  // muestra/oculta el input de tope segun el combobox del ultimo tramo
+  var cell=sel.parentNode, inp=cell.querySelector('input[data-k="sup"]');
+  if(!inp) return;
+  if(sel.value==='fijo'){ inp.style.display=''; if(!inp.value) inp.focus(); }
+  else { inp.style.display='none'; }
+}
+function leerTramos(id){
+  var els=Array.prototype.slice.call(document.querySelectorAll('[data-t="'+id+'"]'));
+  var byI={};
+  els.forEach(function(el){ var i=el.getAttribute('data-i'), kk=el.getAttribute('data-k');
+    (byI[i]=byI[i]||{})[kk]= (kk==='supmodo') ? el.value : (el.value===''? null : Number(el.value)); });
+  return Object.keys(byI).sort(function(a,b){return a-b;}).map(function(i){ var r=byI[i];
+    var sup = (r.sup==null? null : r.sup);
+    if(r.supmodo==='inf') sup=null;           // "En adelante" => sin tope
+    // si eligio "Monto tope" pero dejo el campo vacio, se trata como sin tope
+    return {inf:r.inf||0, sup:sup, pct:r.pct||0}; });
+}
+function guardarMostrarComision(){
+  var ag=document.getElementById('swComAg').checked, co=document.getElementById('swComCo').checked;
+  document.getElementById('comVisMsg').textContent='Guardando…';
+  google.script.run.withSuccessHandler(function(){ document.getElementById('comVisMsg').textContent='Guardado ✓'; cargar(); })
+    .withFailureHandler(function(e){ document.getElementById('comVisMsg').textContent='Error: '+limpiaMsg(e.message); })
+    .saveMostrarComision(ag, co);
+}
+function guardarSupervisores(){
+  var txt=document.getElementById('supEmails').value||'';
+  var arr=txt.split(/[\n,;]+/).map(function(s){return s.trim();}).filter(Boolean);
+  document.getElementById('supMsg').textContent='Guardando…';
+  google.script.run.withSuccessHandler(function(list){
+    document.getElementById('supMsg').textContent='Guardado ✓ ('+(list?list.length:0)+' supervisores)';
+    document.getElementById('supEmails').value=(list||[]).join('\n');
+  }).withFailureHandler(function(e){
+    document.getElementById('supMsg').textContent='Error: '+limpiaMsg(e.message);
+  }).saveSupervisores(arr);
+}
+function comis(p,t){
+  if(p==null) return '<span style="color:var(--mut)">—</span>';
+  var col=p>0?'var(--ok)':'var(--mut)';
+  return '<span style="color:'+col+'">'+p.toFixed(1).replace('.',',')+'%</span> <span class="sub">T'+t+'</span>';
+}
+function pctTxt(x){ return (x==null)?'—':((Math.round(x*1000)/10).toFixed(1).replace('.',',')+'%'); }
+
+function render(){
+  var k=DATA.kpis;
+  var ventasTot=(k.roundPares||0)+((k.nViajes||0)-(k.roundViajes||0));
+  document.getElementById('cards').innerHTML=
+    card('Ventas totales',CLP(k.totalVentas),k.nViajes+' viajes','var(--acc)')+
+    card('Compartida',CLP(k.compMonto),k.compN+' · '+pct(k.compMonto,k.totalVentas),'var(--comp)')+
+    card('Exclusiva',CLP(k.exclMonto),k.exclN+' · '+pct(k.exclMonto,k.totalVentas),'var(--excl)')+
+    card('Ventas ida y vuelta',(k.roundPares||0),(k.roundViajes||0)+' viajes · '+pct(k.roundPares||0,ventasTot)+' de las ventas','var(--acc2)');
+
+  var cp=DATA.configPeriodo||{};
+  document.getElementById('metaCfgPill').textContent='config: '+(cp.label||'—');
+  document.getElementById('metaCfgNota').innerHTML=
+    'Las metas y tramos aplicados son los vigentes para <b>'+(cp.label||'—')+'</b> · meta grupal '+
+    (DATA.metas.grupo?CLP(DATA.metas.grupo):'sin definir')+
+    ' ('+origenTxt(cp.metasOrigen, cp.metasDesdeLabel)+') · tramos ('+origenTxt(cp.tramosOrigen, cp.tramosDesdeLabel)+').';
+
+  renderEjecutivos();
+
+  var sel=document.getElementById('agSel'), prev=sel.value;
+  sel.innerHTML='<option value="">Todos los agentes</option>'+
+    DATA.ejecutivos.map(function(e){return '<option value="'+e.nombre.replace(/"/g,'&quot;')+'">'+e.nombre+'</option>';}).join('');
+  sel.value=prev;
+  document.getElementById('audStamp').textContent = (DATA.auditoria&&DATA.auditoria.actualizado)? ('auditorías al '+DATA.auditoria.actualizado) : 'auditorías: sincronizando…';
+
+  fill('tCoord',DATA.coordinadores,function(c){
+    return '<td>'+c.coordinador+'</td><td class="mono">'+CLP(c.dia)+'</td><td class="mono">'+CLP(c.noche)+
+      '</td><td class="mono"><b>'+CLP(c.total)+'</b></td><td class="mono">'+c.n+'</td><td class="mono">'+(c.turnos==null?'—':c.turnos)+'</td><td class="mono">'+(c.ventaPromedioFranja==null?'—':CLP(c.ventaPromedioFranja))+'</td><td class="mono">'+av(c.avance)+'</td><td class="mono">'+comis(c.comisionPct,c.tramo)+'</td><td class="mono"><b>'+CLP(c.comision)+'</b></td>';
+  },'Sin coordinadores activos en el rango (revisa Turnos 360).',10);
+
+  fill('tOtras',DATA.otrasVentas,function(o){
+    return '<td>'+o.nombre+'</td><td><span class="tag-rol">'+o.rol+'</span></td><td class="mono">'+CLP(o.monto)+'</td><td class="mono">'+o.n+'</td>';
+  },'Sin otras ventas en el rango.',4);
+
+  fill('tCorreos',DATA.correosMal.porEjecutivo,function(m){
+    var p=m.pctOk==null?'—':Math.round(m.pctOk*100)+'%';
+    var col=m.pctOk!=null&&m.pctOk<0.8?'var(--bad)':'var(--ok)';
+    return '<td>'+m.nombre+'</td><td class="mono">'+m.total+'</td><td class="mono">'+m.malos+'</td><td class="mono" style="color:'+col+'">'+p+'</td>';
+  },'Sin datos de compartida en el rango.',4);
+
+  document.getElementById('perfStamp').textContent = DATA.desempeno.actualizado? ('actualizado '+DATA.desempeno.actualizado) : 'sin datos · pulsa Actualizar';
+  document.getElementById('perfNota').textContent = DATA.desempeno.sinFechas?
+    'La vista de Tableau entrega el agregado por agente (sin fechas): los valores corresponden al periodo publicado en la vista, no al filtro de este panel.' :
+    'Promedios del periodo seleccionado (crosstab Performance Support).';
+  document.getElementById('maeStamp').textContent = DATA.maestros.actualizado? (DATA.maestros.total+' colaboradores · '+DATA.maestros.actualizado) : 'sin sincronizar';
+  fill('tPerf',DATA.desempeno.lista,function(p){
+    var cs=p.csat==null?'—':Math.round(p.csat*100)+'%';
+    var csCol=p.csat!=null&&p.csat<0.8?'var(--bad)':'var(--ok)';
+    var np=p.nps==null?'—':p.nps;
+    var npCol=p.nps!=null&&p.nps<0?'var(--bad)':'var(--ok)';
+    function cum(x){ if(x==null) return '<td class="mono">—</td>';
+      var c=x<0.8?'var(--bad)':(x<0.95?'var(--acc)':'var(--ok)');
+      return '<td class="mono" style="color:'+c+'">'+Math.round(x*100)+'%</td>'; }
+    return '<td>'+p.nombre+'</td><td><span class="tag-rol">'+p.rol+'</span></td><td class="mono">'+(p.tickets==null?'—':p.tickets)+'</td><td class="mono" style="color:'+csCol+'">'+cs+'</td><td class="mono" style="color:'+npCol+'">'+np+
+      '</td>'+cum(p.firt)+cum(p.furt);
+  },'Sin desempeño en el rango. Pulsa "Actualizar desde Tableau".',7);
+
+  var mg=DATA.metas.grupo||0, av1=mg?Math.round(k.totalVentas/mg*100):0;
+  document.getElementById('grupoMeta').innerHTML=
+    '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px"><span>'+CLP(k.totalVentas)+' / '+(mg?CLP(mg):'sin meta')+'</span><b>'+(mg?av1+'%':'')+'</b></div>'+
+    '<div class="barfill"><i style="width:'+Math.min(av1,100)+'%;background:'+(av1>=100?'var(--ok)':'var(--acc)')+'"></i></div>';
+
+  renderChart(); renderSemana(); renderMeta(); renderMetaCoord(); renderDia();
+
+  var R=DATA.resumen||{};
+  document.getElementById('resumenCards').innerHTML=
+    card('Comisión total',CLP(R.comisionTotal||0),'agentes + coordinadores','var(--acc)')+
+    card('Comisión agentes',CLP(R.comisionEjecutivos||0),(R.agentesEnMeta||0)+'/'+(R.nAgentes||0)+' en meta','var(--comp)')+
+    card('Comisión coordinadores',CLP(R.comisionCoordinadores||0),(R.coordEnMeta||0)+'/'+(R.nCoordinadores||0)+' en meta','var(--noche)')+
+    card('Ventas ida y vuelta',(k.roundPares||0),CLP(k.roundMonto||0)+' · '+pct(k.roundPares||0,ventasTot),'var(--acc2)');
+}
+
+// --------- TABLA DE EJECUTIVOS: modos de visualización y orden --------------
+var EJ_MODO='perf', EJ_ORD='ventas';
+function setModoEjec(m){
+  if(m===EJ_MODO) return;
+  EJ_MODO=m;
+  document.getElementById('ejModoPerf').classList.toggle('on', m==='perf');
+  document.getElementById('ejModoVta').classList.toggle('on', m==='ventas');
+  renderEjecutivos();
+}
+function setOrdenEjec(){ EJ_ORD=document.getElementById('ejOrden').value; renderEjecutivos(); }
+function renderEjecutivos(){
+  var box=document.getElementById('tEjecBox'); if(!box||!DATA) return;
+  var arr=(DATA.ejecutivos||[]).slice();
+  var CMP={
+    ventas:     function(a,b){ return b.ventas-a.ventas; },
+    round:      function(a,b){ return (b.ventasRound||0)-(a.ventasRound||0) || b.ventas-a.ventas; },
+    montoRound: function(a,b){ return (b.montoRound||0)-(a.montoRound||0) || b.ventas-a.ventas; },
+    comision:   function(a,b){ return (b.comisionReal||0)-(a.comisionReal||0) || b.ventas-a.ventas; },
+    nombre:     function(a,b){ return String(a.nombre).localeCompare(String(b.nombre)); }
+  };
+  arr.sort(CMP[EJ_ORD]||CMP.ventas);
+
+  function nota(e){ return e.notaAuditoria==null ? '<span style="color:var(--mut)">—</span>'
+    : '<span style="color:'+(e.notaAuditoria<70?'var(--bad)':(e.notaAuditoria<90?'var(--acc)':'var(--ok)'))+'">'+e.notaAuditoria+'</span>'; }
+  function pok(e){ return e.pctOk==null ? '<span style="color:var(--mut)">—</span>'
+    : '<span style="color:'+(e.pctOk<0.8?'var(--bad)':'var(--ok)')+'">'+Math.round(e.pctOk*100)+'%</span>'; }
+  function adh(e){ return (e.adherencia==null) ? '<span style="color:var(--mut)">s/d</span>'
+    : '<span style="color:'+(e.adherencia>=0.9?'var(--ok)':(e.adherencia>=0.8?'var(--acc)':'var(--bad)'))+'">'+Math.round(e.adherencia*100)+'%</span>'; }
+
+  var heads, fila;
+  if(EJ_MODO==='perf'){
+    heads=['Ejecutivo','RUT','Ventas','Nota Aud.','% Correctos','% Adher.','Meta','Avance','% Com.','Com. real'];
+    fila=function(e){
+      return '<td>'+agEsc(e.nombre)+'</td><td class="mono">'+(e.rut||'—')+'</td>'+
+        '<td class="mono"><b>'+CLP(e.ventas)+'</b></td><td class="mono">'+nota(e)+'</td>'+
+        '<td class="mono">'+pok(e)+'</td><td class="mono">'+adh(e)+'</td>'+
+        '<td class="mono">'+(e.meta?CLP(e.meta):'—')+'</td><td class="mono">'+av(e.avance)+'</td>'+
+        '<td class="mono">'+comis(e.comisionPct,e.tramo)+'</td>'+
+        '<td class="mono"><b style="color:var(--ok)">'+CLP(e.comisionReal)+'</b></td>';
+    };
+  } else {
+    heads=['Ejecutivo','RUT','Ventas','Ventas Día','Ventas Noche','Q Round','Q One Way','Monto Round','Monto One Way',
+           'Q Compartidas','Q Exclusivas','Monto Compartidas','Monto Exclusivas','Meta','Avance','% Com.','Comisión','Com. real'];
+    fila=function(e){
+      return '<td>'+agEsc(e.nombre)+'</td><td class="mono">'+(e.rut||'—')+'</td>'+
+        '<td class="mono"><b>'+CLP(e.ventas)+'</b></td>'+
+        '<td class="mono">'+CLP(e.dia)+'</td><td class="mono">'+CLP(e.noche)+'</td>'+
+        '<td class="mono"><b>'+(e.ventasRound||0)+'</b></td><td class="mono">'+(e.ventasOneWay||0)+'</td>'+
+        '<td class="mono">'+CLP(e.montoRound||0)+'</td><td class="mono">'+CLP(e.montoOneWay||0)+'</td>'+
+        '<td class="mono">'+(e.compN||0)+'</td><td class="mono">'+(e.exclN||0)+'</td>'+
+        '<td class="mono">'+CLP(e.comp)+'</td><td class="mono">'+CLP(e.excl)+'</td>'+
+        '<td class="mono">'+(e.meta?CLP(e.meta):'—')+'</td><td class="mono">'+av(e.avance)+'</td>'+
+        '<td class="mono">'+comis(e.comisionPct,e.tramo)+'</td><td class="mono">'+CLP(e.comision)+'</td>'+
+        '<td class="mono"><b style="color:var(--ok)">'+CLP(e.comisionReal)+'</b></td>';
+    };
+  }
+
+  if(!arr.length){
+    box.innerHTML='<table><thead><tr>'+heads.map(function(h){return '<th>'+h+'</th>';}).join('')+
+      '</tr></thead><tbody><tr><td colspan="'+heads.length+'" style="color:var(--mut)">Sin ventas de ejecutivos en el rango.</td></tr></tbody></table>';
+    return;
+  }
+  // fila de totales del periodo
+  var T={ventas:0,dia:0,noche:0,round:0,one:0,mRound:0,mOne:0,compN:0,exclN:0,comp:0,excl:0,com:0,comReal:0};
+  arr.forEach(function(e){ T.ventas+=e.ventas||0; T.dia+=e.dia||0; T.noche+=e.noche||0;
+    T.round+=e.ventasRound||0; T.one+=e.ventasOneWay||0; T.mRound+=e.montoRound||0; T.mOne+=e.montoOneWay||0;
+    T.compN+=e.compN||0; T.exclN+=e.exclN||0; T.comp+=e.comp||0; T.excl+=e.excl||0;
+    T.com+=e.comision||0; T.comReal+=e.comisionReal||0; });
+  var totalRow = (EJ_MODO==='perf')
+    ? '<tr class="total"><td>Total ('+arr.length+')</td><td></td><td class="mono">'+CLP(T.ventas)+'</td><td></td><td></td><td></td><td></td><td></td><td></td><td class="mono">'+CLP(T.comReal)+'</td></tr>'
+    : '<tr class="total"><td>Total ('+arr.length+')</td><td></td><td class="mono">'+CLP(T.ventas)+'</td><td class="mono">'+CLP(T.dia)+'</td><td class="mono">'+CLP(T.noche)+
+      '</td><td class="mono">'+T.round+'</td><td class="mono">'+T.one+'</td><td class="mono">'+CLP(T.mRound)+'</td><td class="mono">'+CLP(T.mOne)+
+      '</td><td class="mono">'+T.compN+'</td><td class="mono">'+T.exclN+'</td><td class="mono">'+CLP(T.comp)+'</td><td class="mono">'+CLP(T.excl)+
+      '</td><td></td><td></td><td></td><td class="mono">'+CLP(T.com)+'</td><td class="mono">'+CLP(T.comReal)+'</td></tr>';
+
+  box.innerHTML='<table><thead><tr>'+heads.map(function(h){return '<th>'+h+'</th>';}).join('')+'</tr></thead><tbody>'+
+    arr.map(function(e){ return '<tr>'+fila(e)+'</tr>'; }).join('')+'</tbody><tfoot>'+totalRow+'</tfoot></table>';
+}
+
+function fill(id,arr,rowFn,empty,cols){
+  var tb=document.querySelector('#'+id+' tbody'); tb.innerHTML='';
+  if(!arr.length){tb.innerHTML='<tr><td colspan="'+cols+'" style="color:var(--mut)">'+empty+'</td></tr>';return;}
+  arr.forEach(function(x){tb.innerHTML+='<tr>'+rowFn(x)+'</tr>';});
+}
+function card(k,v,s,c){return '<div class="card"><span class="tag" style="background:'+c+'"></span><div class="k">'+k+'</div><div class="v">'+v+'</div><div class="s">'+s+'</div></div>';}
+function pct(a,b){return b?Math.round(a/b*100)+'%':'0%';}
+function av(x){if(x==null)return '—';var c=x>=1?'var(--ok)':(x>=0.7?'var(--acc)':'var(--bad)');return '<span style="color:'+c+'">'+Math.round(x*100)+'%</span>';}
+function agEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function turnoLabel(start,end){ function pp(n){return (n<10?'0':'')+(n%24);} return pp(start)+':00 → '+pp(end)+':00'; }
+function agTabla(headers, filas, totalRow){
+  if(!filas.length) return '<div class="sub" style="padding:6px 2px">Sin datos en el periodo.</div>';
+  var h='<div class="scroll"><table><thead><tr>'+headers.map(function(x){return '<th>'+x+'</th>';}).join('')+'</tr></thead><tbody>';
+  h+=filas.join('');
+  h+='</tbody>'+(totalRow?('<tfoot>'+totalRow+'</tfoot>'):'')+'</table></div>';
+  return h;
+}
+function agDet(titulo, count, inner, nota){
+  return '<details style="margin-top:10px;border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--panel)">'+
+    '<summary style="cursor:pointer;font-weight:700;color:var(--ink);list-style:none">'+titulo+' <span class="pill">'+count+'</span></summary>'+
+    (nota?'<div class="sub" style="margin:8px 0 4px">'+nota+'</div>':'')+
+    '<div style="margin-top:8px">'+inner+'</div></details>';
+}
+function agPctCsat(x){return x==null?'—':Math.round(x*100)+'%';}
+
+// ---------------- VISTA AGENTE (un agente, periodo seleccionable) ----------
+var AG_MES=null, AG_CACHE={}, AG_PER='actual', AG_REQ=0, AG_CUR_NK='';
+function setPeriodoAgente(periodo){
+  if(periodo===AG_PER && AG_CACHE[periodo]) return;
+  AG_PER=periodo;
+  document.getElementById('periodoActual').classList.toggle('on', periodo==='actual');
+  document.getElementById('periodoAnterior').classList.toggle('on', periodo==='anterior');
+  cargarAgentes(periodo, true);
+}
+function cargarAgentes(periodo, keepSel){
+  periodo = periodo || AG_PER || 'actual'; AG_PER = periodo;
+  var sel=document.getElementById('agViewSel');
+  var prevSel = sel.value || '';                 // preservar SIEMPRE lo elegido
+  if(AG_CACHE[periodo]){ AG_MES=AG_CACHE[periodo]; pintarSelectorAgentes(prevSel); return; }
+  var myReq=++AG_REQ;                            // token anti-carrera
+  sel.innerHTML='<option value="">Cargando…</option>';
+  google.script.run.withSuccessHandler(function(r){
+    if(myReq!==AG_REQ) return;                   // respuesta obsoleta: ignorar
+    AG_CACHE[periodo]=r; AG_MES=r; pintarSelectorAgentes(prevSel);
+  }).withFailureHandler(function(e){
+    if(myReq!==AG_REQ) return;
+    sel.innerHTML='<option value="">—</option>';
+    document.getElementById('agResultado').innerHTML=panelError('No se pudo cargar la información.', limpiaMsg(e.message));
+  }).getMesAgentes(periodo);
+}
+function pintarSelectorAgentes(prevSel){
+  var sel=document.getElementById('agViewSel');
+  document.getElementById('agMesLabel').textContent = AG_MES.mesLabel || (AG_PER==='anterior'?'mes anterior':'mes en curso');
+  var lista=AG_MES.ejecutivos||[];
+  var actual = prevSel || sel.value || '';
+  var ops='<option value="">— Selecciona un agente —</option>';
+  lista.forEach(function(e){ ops+='<option value="'+String(e.nombre).replace(/"/g,'&quot;')+'">'+e.nombre+'</option>'; });
+  sel.innerHTML=ops;
+  var soloUno = (ACCESO && ACCESO.esAgente);
+  if(soloUno && lista.length){ sel.value=lista[0].nombre; sel.style.display='none'; renderAgente(); return; }
+  sel.style.display='';
+  var existe=false; lista.forEach(function(e){ if(e.nombre===actual) existe=true; });
+  if(actual && existe){ sel.value=actual; renderAgente(); return; }
+  document.getElementById('agResultado').innerHTML='';
+}
+function renderAgente(){
+  var nombre=document.getElementById('agViewSel').value;
+  var box=document.getElementById('agResultado');
+  if(!nombre||!AG_MES){ box.innerHTML=''; return; }
+  var e=null; (AG_MES.ejecutivos||[]).forEach(function(x){ if(x.nombre===nombre) e=x; });
+  if(!e){ box.innerHTML='<div class="panel">Sin datos del agente este periodo.</div>'; return; }
+
+  var TIP='Los registros incorrectos pueden estar asociados a correos con errores de digitación, correos que rebotan, y correos genéricos que se ingresan cuando el cliente no quiere dar esa información. Mantener este indicador sobre 80% es crucial para no afectar la comisión.';
+  var pctC=(e.pctOk==null)?null:Math.round(e.pctOk*100);
+  var colC=(pctC==null)?'var(--mut)':(pctC>=80?'var(--ok)':'var(--bad)');
+  var perLabel = AG_MES.mesLabel || (AG_PER==='anterior'?'mes anterior':'mes en curso');
+
+  var cardVentas=card('Ventas del periodo', CLP(e.ventas), 'Meta '+(e.meta?CLP(e.meta):'—')+' · '+av(e.avance), 'var(--acc)');
+  var verCom = !!((AG_MES&&AG_MES.mostrarComision)||{}).agentes;
+  var cardMeta=card('% de meta', (e.avance==null?'—':Math.round(e.avance*100)+'%'),
+    (e.tramo?('Tramo '+e.tramo+(verCom?(' · comisión '+(e.comisionPct||0)+'%'):'')):''), e.avance!=null&&e.avance>=1?'var(--ok)':'var(--acc)');
+  var cardAud=card('Nota auditorías', (e.notaAuditoria==null?'—':e.notaAuditoria), (e.nAudit||0)+' auditoría(s)',
+    e.notaAuditoria==null?'var(--mut)':(e.notaAuditoria>=80?'var(--ok)':'var(--bad)'));
+  var cardCorr='<div class="card" title="'+TIP.replace(/"/g,'&quot;')+'"><span class="tag" style="background:'+colC+'"></span>'+
+    '<div class="k">% Registros correctos &#9432;</div><div class="v" style="color:'+colC+'">'+(pctC==null?'—':pctC+'%')+'</div>'+
+    '<div class="s">'+(e.regMalos||0)+' incorrectos de '+(e.regTotal||0)+'</div></div>';
+  var cardTk=card('Cantidad de tickets', (e.tickets==null?'—':e.tickets), 'del '+perLabel, 'var(--acc)');
+  var cardRnd=card('Ventas ida y vuelta', (e.ventasRound||0),
+    (e.pctRound==null?'—':(Math.round(e.pctRound*100)+'% de tus ventas'))+' · '+(e.ventasOneWay||0)+' one way', 'var(--acc2)');
+  var cardsTop='<div class="cards">'+cardVentas+cardMeta+cardAud+cardCorr+cardTk+cardRnd+'</div>';
+
+  var cardsSec='<div class="cards">'+
+    card('% CSAT', agPctCsat(e.csat), 'satisfacción', 'var(--ok)')+
+    card('NPS', (e.nps==null?'—':e.nps), 'recomendación', 'var(--acc)')+
+    card('% FIRT ≤ 24h', (e.firtPct==null?'—':Math.round(e.firtPct*100)+'%'), 'primera respuesta', 'var(--acc)')+
+    card('% FURT ≤ 120h', (e.furtPct==null?'—':Math.round(e.furtPct*100)+'%'), 'resolución', 'var(--acc)')+
+    '</div>';
+
+  var totVentas=(e.ventasDetalle||[]).reduce(function(s,v){return s+(v.monto||0);},0);
+  var fv=(e.ventasDetalle||[]).map(function(v){
+    var tipo=v.round? '<span class="tag-rol" style="color:var(--acc)">Ida y vuelta</span>' : '<span class="tag-rol">One way</span>';
+    return '<tr><td>'+agEsc(v.fecha)+'</td><td>'+agEsc(v.producto)+'</td><td>'+tipo+'</td><td class="mono">'+CLP(v.monto)+'</td><td>'+agEsc(v.user||'—')+'</td></tr>'; });
+  var totalRowVentas='<tr class="total"><td>Total</td><td class="sub">'+(e.ventasDetalle||[]).length+' viajes</td><td class="sub">'+(e.ventasRound||0)+' round</td><td class="mono">'+CLP(totVentas)+'</td><td></td></tr>';
+  var detVentas=agDet('Detalle de ventas', (e.ventasDetalle||[]).length, agTabla(['Fecha','Servicio','Tipo','Monto','Correo pasajero'], fv, totalRowVentas));
+
+  var totReg=(e.registrosMalos||[]).reduce(function(s,m){return s+(m.monto||0);},0);
+  var fr=(e.registrosMalos||[]).map(function(m){ return '<tr><td>'+agEsc(m.fecha)+'</td><td>'+agEsc(m.correo||'—')+'</td><td class="mono">'+CLP(m.monto)+'</td></tr>'; });
+  var totalRowReg='<tr class="total"><td>Total</td><td class="sub">'+(e.registrosMalos||[]).length+' incorrectos</td><td class="mono">'+CLP(totReg)+'</td></tr>';
+  var detReg=agDet('Detalle de registros incorrectos', (e.registrosMalos||[]).length, agTabla(['Fecha','Correo ingresado','Monto'], fr, totalRowReg), TIP);
+
+  var fa=(e.auditDetalle||[]).map(function(a){ return '<tr><td>'+agEsc(a.ticket||'—')+'</td><td>'+agEsc(a.fecha||'—')+'</td><td class="mono">'+a.score+'</td></tr>'; });
+  var innerAud=(e.auditDetalle||[]).length? agTabla(['N° Ticket','Fecha ticket','Nota'], fa)
+    : '<div class="sub" style="padding:6px 2px">Sin tickets auditados en el periodo.</div>';
+  var detAud=agDet('Detalle de tickets auditados', (e.auditDetalle||[]).length, innerAud);
+
+  // RESUMEN DE COMISIÓN del periodo (base + 70% fijo + 3 bonos de calidad de 10%)
+  var base=e.comision||0;
+  var pctP=function(c){ return (c==null?'—':Math.round(c*100)+'%'); };
+  var resumenCom;
+  if(!verCom){
+    resumenCom='<div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">'+
+      '<div class="kick">RESUMEN DE COMISIÓN · '+agEsc(perLabel).toUpperCase()+'</div>'+
+      '<div class="sub" style="margin-top:6px">Tu comisión del periodo está <b>por definir</b>. Cuando esté disponible, la verás aquí.</div></div>';
+  } else {
+    resumenCom='<div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">'+
+      '<div class="kick">RESUMEN DE COMISIÓN · '+agEsc(perLabel).toUpperCase()+'</div>'+
+      '<div class="sub" style="margin:2px 0 10px">Base = ventas × % del tramo (<b>'+CLP(base)+'</b>). Se paga 70% fijo + hasta 30% por calidad (tres criterios de 10%).</div>'+
+      '<table><tbody>'+
+        '<tr><td>Comisión por Venta (70%)</td><td class="mono"><b>'+CLP(e.comisionVenta)+'</b></td></tr>'+
+        '<tr><td>Comisión Calidad Registros (0–10%) <span class="sub">· cumpl. '+pctP(e.cReg)+'</span></td><td class="mono">'+CLP(e.bonoRegistros)+'</td></tr>'+
+        '<tr><td>Comisión Calidad Auditoría (0–10%) <span class="sub">· '+((e.nAudit||0)===0?'sin auditorías en el periodo → 100%':('cumpl. '+pctP(e.cAud)))+'</span></td><td class="mono">'+CLP(e.bonoAuditoria)+'</td></tr>'+
+        '<tr><td>Comisión Adherencia (0–10%) <span class="sub">· '+((e.adherencia==null)?'sin datos de asistencia → 100%':('cumpl. '+pctP(e.cAdh)))+'</span></td><td class="mono">'+CLP(e.bonoAdherencia)+'</td></tr>'+
+        '<tr class="total"><td>Comisión real (total)</td><td class="mono"><b style="color:var(--ok)">'+CLP(e.comisionReal)+'</b></td></tr>'+
+      '</tbody></table></div>';
+  }
+
+  // INCIDENCIAS DE ASISTENCIA (ausentismo BUK/BSC) del periodo
+  AG_CUR_NK = e.nk;
+  var aus=e.ausentismo||{disponible:false,detalle:[]};
+  var esSup=(ACCESO && ACCESO.esSupervisor);
+  var seccionAus;
+  if(!aus.disponible){
+    seccionAus='<div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">'+
+      '<div class="kick">INCIDENCIAS DE ASISTENCIA DEL PERIODO</div>'+
+      '<div class="sub" style="margin-top:6px">No fue posible cargar las incidencias de asistencia'+(aus.mensaje?(': '+agEsc(aus.mensaje)):'.')+'</div></div>';
+  } else {
+    var adhTxt = (aus.adherencia==null) ? 's/d' : Math.round(aus.adherencia*100)+'%';
+    // tarjeta por categoría: nº que OCURRIERON, y subtítulo/color según cuántas DESCUENTAN tras revisión
+    function catCard(t, raw, desc){
+      raw=raw||0; desc=desc||0;
+      var sub = (raw===0) ? 'sin incidencias'
+        : (desc===0) ? ('revisada'+(raw>1?'s':'')+' · no descuenta'+(raw>1?'n':''))
+        : (desc<raw) ? (desc+' de '+raw+' descuenta'+(desc>1?'n':''))
+        : 'descuenta'+(raw>1?'n':'')+' puntos';
+      return card(t, raw, sub, (desc>0?'var(--bad)':'var(--ok)'));
+    }
+    var cAus='<div class="cards">'+
+      card('Adherencia al turno', adhTxt, 'turnos sin descuento / trabajables', (aus.adherencia==null?'var(--mut)':(aus.adherencia>=0.9?'var(--ok)':(aus.adherencia>=0.8?'var(--acc)':'var(--bad)'))))+
+      catCard('Retrasos', aus.retrasos, aus.retrasosDesc)+
+      catCard('Ausencias injustificadas', aus.ausencias, aus.ausenciasDesc)+
+      catCard('Salidas anticipadas', aus.salidasAnt, aus.salidasDesc)+
+      ((aus.mixto)? catCard('Retraso + salida ant.', aus.mixto, aus.mixtoDesc) : '')+
+      '</div>';
+    var totalDesc=(aus.retrasosDesc||0)+(aus.ausenciasDesc||0)+(aus.salidasDesc||0)+(aus.mixtoDesc||0);
+    var otrasTxt='Incidencias que descuentan tras revisión: <b style="color:'+(totalDesc>0?'var(--bad)':'var(--ok)')+'">'+totalDesc+'</b>   ·   No marca salida: <b>'+(aus.sinSalida||0)+'</b>   ·   Licencia médica: <b>'+(aus.licencia||0)+'</b>';
+    var det=aus.detalle||[];
+    var rows=det.map(function(x){
+      var mins = x.min? (x.min+' min') : '—';
+      var estadoTxt = x.informativa ? '<span style="color:var(--mut)">informativa</span>'
+        : (x.descuenta ? '<span style="color:var(--bad)">descuenta</span>' : '<span style="color:var(--ok)">no descuenta</span>');
+      var org = (x.origen==='manual') ? '<span class="tag-rol" style="color:var(--acc)">Registro supervisor</span>' : '<span class="tag-rol">Biométrico</span>';
+      var coment = x.comentario ? ('<div class="sub">“'+agEsc(x.comentario)+'”'+(x.supervisor?(' — '+agEsc(x.supervisor)):'')+'</div>') : '';
+      var turno = x.turnoPlan || '—';
+      var marca = (x.entrada||x.salida) ? ((x.entrada||'—')+' / '+(x.salida||'—')) : '—';
+      return '<tr><td>'+agEsc(x.fecha)+'</td><td>'+agEsc(x.label)+coment+'</td><td class="mono">'+agEsc(turno)+'</td><td class="mono">'+agEsc(marca)+'</td><td class="mono">'+mins+'</td><td>'+org+'</td><td>'+estadoTxt+'</td></tr>';
+    });
+    var tabla = det.length
+      ? '<div class="scroll"><table><thead><tr><th>Fecha</th><th>Incidencia</th><th>Turno plan.</th><th>Marcaje E/S</th><th>Minutos</th><th>Origen</th><th>Efecto</th></tr></thead><tbody>'+rows.join('')+'</tbody></table></div>'
+      : '<div class="sub" style="padding:6px 2px">Sin incidencias registradas en el periodo.</div>';
+    var notaSup = '<div class="sub" style="margin:6px 0 0">Estas incidencias las revisa tu supervisor. Si alguna no corresponde (olvido de marcaje, permiso, etc.), coordínalo con él.</div>';
+    seccionAus='<div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">'+
+      '<div class="kick">INCIDENCIAS DE ASISTENCIA DEL PERIODO</div>'+
+      '<div class="sub" style="margin:2px 0 8px">Retrasos, ausencias injustificadas y salidas anticipadas descuentan puntos de la comisión. “No marca salida” y “licencia médica” son informativas.</div>'+
+      cAus+
+      '<div class="sub" style="margin:6px 0 10px">Otras incidencias — '+otrasTxt+'</div>'+
+      tabla+notaSup+
+      '<div class="sub" id="ovMsg" style="margin-top:8px;color:var(--bad)"></div></div>';
+  }
+
+  box.innerHTML='<div class="panel"><div class="kick">'+agEsc(e.nombre).toUpperCase()+(e.sup?(' · SUP '+agEsc(e.sup).toUpperCase()):'')+' · '+agEsc(perLabel).toUpperCase()+'</div>'+
+    cardsTop+cardsSec+resumenCom+seccionAus+detVentas+detReg+detAud+'</div>';
+}
+
+// (supervisor) cambia el estado de una incidencia y recarga la vista del agente
+function guardarOverride(fecha, tipo, i){
+  var est=document.getElementById('ovEst_'+i).value;
+  var com=document.getElementById('ovCom_'+i).value||'';
+  var btn=document.getElementById('ovBtn_'+i); if(btn){ btn.disabled=true; btn.textContent='Guardando…'; }
+  var msg=document.getElementById('ovMsg'); if(msg) msg.textContent='';
+  google.script.run.withSuccessHandler(function(){
+    AG_CACHE={}; cargarAgentes(AG_PER, true);   // recalcula adherencia y comisión
+  }).withFailureHandler(function(e){
+    if(btn){ btn.disabled=false; btn.textContent='Guardar'; }
+    if(msg) msg.textContent='No se pudo guardar: '+limpiaMsg(e.message);
+  }).guardarOverrideIncidencia(AG_CUR_NK, fecha, tipo, est, com);
+}
+
+// ------------- AUDITORÍA SUPERVISOR (registro y edición de incidencias) -----
+var AU_MES=null, AU_CACHE={}, AU_PER='actual', AU_REQ=0, AU_CUR_NK='', AU_CUR_NOM='';
+function setPeriodoAudit(p){
+  if(p===AU_PER && AU_CACHE[p]) return;
+  AU_PER=p;
+  document.getElementById('auPerActual').classList.toggle('on',p==='actual');
+  document.getElementById('auPerAnterior').classList.toggle('on',p==='anterior');
+  cargarAuditAgentes(p, true);
+}
+function cargarAuditAgentes(periodo, keepSel){
+  periodo=periodo||AU_PER||'actual'; AU_PER=periodo;
+  var sel=document.getElementById('auAgSel'); var prev=sel.value||'';
+  if(AU_CACHE[periodo]){ AU_MES=AU_CACHE[periodo]; pintarSelectorAudit(prev); return; }
+  var my=++AU_REQ; sel.innerHTML='<option value="">Cargando…</option>';
+  google.script.run.withSuccessHandler(function(r){ if(my!==AU_REQ) return; AU_CACHE[periodo]=r; AU_MES=r; pintarSelectorAudit(prev); })
+    .withFailureHandler(function(e){ if(my!==AU_REQ) return; sel.innerHTML='<option value="">—</option>';
+      document.getElementById('auResultado').innerHTML=panelError('No se pudo cargar la información.', limpiaMsg(e.message)); })
+    .getMesAgentes(periodo);
+}
+function pintarSelectorAudit(prev){
+  var sel=document.getElementById('auAgSel');
+  document.getElementById('auMesLabel').textContent = AU_MES.mesLabel || (AU_PER==='anterior'?'mes anterior':'mes en curso');
+  var lista=AU_MES.ejecutivos||[];
+  var ops='<option value="">— Selecciona un agente —</option>';
+  lista.forEach(function(e){ ops+='<option value="'+String(e.nombre).replace(/"/g,'&quot;')+'">'+e.nombre+'</option>'; });
+  sel.innerHTML=ops;
+  var actual=prev||sel.value||'';
+  var ex=false; lista.forEach(function(e){ if(e.nombre===actual) ex=true; });
+  if(actual && ex){ sel.value=actual; renderAudit(); return; }
+  document.getElementById('auResultado').innerHTML='';
+}
+function renderAudit(){
+  var nombre=document.getElementById('auAgSel').value; var box=document.getElementById('auResultado');
+  if(!nombre||!AU_MES){ box.innerHTML=''; return; }
+  var e=null; (AU_MES.ejecutivos||[]).forEach(function(x){ if(x.nombre===nombre) e=x; });
+  if(!e){ box.innerHTML='<div class="panel">Sin datos del agente.</div>'; return; }
+  AU_CUR_NK=e.nk; AU_CUR_NOM=e.nombre;
+  var aus=e.ausentismo||{disponible:false,detalle:[]};
+  var perLabel=AU_MES.mesLabel||(AU_PER==='anterior'?'mes anterior':'mes en curso');
+
+  var form='<div class="panel"><div class="kick">REGISTRAR / EDITAR INCIDENCIA MANUAL · '+agEsc(e.nombre).toUpperCase()+'</div>'+
+    '<div class="sub" style="margin:2px 0 10px">Un registro por día. Usa “Sin incidencia” para anular un falso positivo del biométrico (ej. olvidó marcar pero sí asistió).</div>'+
+    '<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">'+
+      '<div class="fld"><label>Fecha</label><input type="date" id="mFecha" value="'+today()+'"></div>'+
+      '<div class="fld"><label>Tipo</label><select id="mTipo" onchange="mTipoChange()">'+
+        '<option value="RETRASO">Retraso</option>'+
+        '<option value="SALIDA_ANTICIPADA">Salida anticipada</option>'+
+        '<option value="INASISTENCIA">Inasistencia</option>'+
+        '<option value="MIXTO">Retraso + salida anticipada</option>'+
+        '<option value="LICENCIA">Licencia médica</option>'+
+        '<option value="PERMISO">Permiso</option>'+
+        '<option value="SIN_INCIDENCIA">Sin incidencia (asistió / no descuenta)</option>'+
+      '</select></div>'+
+      '<div class="fld"><label>Justificación</label><select id="mJust" onchange="mTipoChange()"><option value="no">Injustificada</option><option value="si">Justificada</option></select></div>'+
+      '<div class="fld"><label>Efecto</label><select id="mDesc"><option value="si">Descuenta</option><option value="no">No descuenta</option></select></div>'+
+      '<div class="fld"><label>Minutos</label><input type="number" id="mMin" value="" style="width:90px" placeholder="opc."></div>'+
+      '<div class="fld" style="flex:1;min-width:180px"><label>Comentario</label><input type="text" id="mCom" placeholder="motivo / detalle"></div>'+
+      '<div class="fld"><label>&nbsp;</label><button class="btn-acc" onclick="guardarManual()">Guardar</button></div>'+
+    '</div><div class="sub" id="mMsg" style="margin-top:8px"></div></div>';
+
+  var det=aus.detalle||[];
+  var rows=det.map(function(x,i){
+    var org = (x.origen==='manual') ? '<span class="tag-rol" style="color:var(--acc)">Manual</span>' : '<span class="tag-rol">Biométrico</span>';
+    var ef = x.informativa ? '<span style="color:var(--mut)">informativa</span>' : (x.descuenta ? '<span style="color:var(--bad)">descuenta</span>' : '<span style="color:var(--ok)">no descuenta</span>');
+    var mins = x.min? (x.min+' min') : '—';
+    var com = x.comentario ? ('“'+agEsc(x.comentario)+'”'+(x.supervisor?('<div class="sub">'+agEsc(x.supervisor)+'</div>'):'')) : '<span style="color:var(--mut)">—</span>';
+    var turno = x.turnoPlan || '—';
+    var marca = (x.entrada||x.salida) ? ((x.entrada||'—')+' / '+(x.salida||'—')) : '—';
+    var acc = '<button class="mini" onclick="auditarFila('+i+')">'+(x.origen==='manual'?'Editar':'Auditar')+'</button>';
+    if(x.origen==='manual') acc += ' <button class="mini" onclick="quitarManual(&#39;'+x.fecha+'&#39;)">Quitar</button>';
+    return '<tr data-i="'+i+'" data-fecha="'+x.fecha+'" data-tiposel="'+(x.tipoSel||'')+'" data-just="'+(x.justificada||'no')+'" data-desc="'+(x.descuenta?'si':'no')+'" data-min="'+(x.min||'')+'" data-com="'+String(x.comentario||'').replace(/"/g,'&quot;')+'">'+
+      '<td>'+agEsc(x.fecha)+'</td><td>'+agEsc(x.label)+'</td><td class="mono">'+agEsc(turno)+'</td><td class="mono">'+agEsc(marca)+'</td><td class="mono">'+mins+'</td><td>'+org+'</td><td>'+ef+'</td><td>'+com+'</td><td>'+acc+'</td></tr>';
+  });
+  var tabla = det.length
+    ? '<div class="scroll"><table><thead><tr><th>Fecha</th><th>Incidencia</th><th>Turno plan.</th><th>Marcaje E/S</th><th>Min</th><th>Origen</th><th>Efecto</th><th>Comentario</th><th>Acciones</th></tr></thead><tbody>'+rows.join('')+'</tbody></table></div>'
+    : '<div class="sub" style="padding:6px 2px">Sin incidencias en el periodo.</div>';
+  var adh=(aus.adherencia==null)?'s/d':Math.round(aus.adherencia*100)+'%';
+  var totalDesc=(aus.retrasosDesc||0)+(aus.ausenciasDesc||0)+(aus.salidasDesc||0)+(aus.mixtoDesc||0);
+  var lista='<div class="panel"><div class="kick">INCIDENCIAS DEL PERIODO · '+agEsc(perLabel).toUpperCase()+'  ·  ADHERENCIA '+adh+'  ·  DESCUENTAN '+totalDesc+'</div>'+
+    '<div class="sub" style="margin:2px 0 8px">“Auditar” carga la fila en el formulario de arriba para cambiar su estado o marcarla “sin incidencia”. Las manuales se pueden editar o quitar.</div>'+tabla+'</div>';
+
+  box.innerHTML=form+lista;
+}
+function mTipoChange(){
+  var t=document.getElementById('mTipo').value;
+  var desc=document.getElementById('mDesc'), just=document.getElementById('mJust');
+  if(t==='SIN_INCIDENCIA'){ desc.value='no'; }
+  else if(t==='LICENCIA'||t==='PERMISO'){ desc.value='no'; just.value='si'; }
+  else if(t==='INASISTENCIA'){ desc.value=(just.value==='si')?'no':'si'; }
+  else { desc.value='si'; }
+}
+function auditarFila(i){
+  var tr=document.querySelector('#auResultado tr[data-i="'+i+'"]'); if(!tr) return;
+  document.getElementById('mFecha').value=tr.getAttribute('data-fecha');
+  document.getElementById('mTipo').value=tr.getAttribute('data-tiposel')||'RETRASO';
+  document.getElementById('mJust').value=tr.getAttribute('data-just')||'no';
+  document.getElementById('mDesc').value=tr.getAttribute('data-desc')||'si';
+  document.getElementById('mMin').value=tr.getAttribute('data-min')||'';
+  document.getElementById('mCom').value=tr.getAttribute('data-com')||'';
+  document.getElementById('mMsg').textContent='Editando la incidencia del '+tr.getAttribute('data-fecha')+'. Ajusta y pulsa Guardar.';
+  try{ document.getElementById('mFecha').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
+}
+function guardarManual(){
+  var fecha=document.getElementById('mFecha').value, tipo=document.getElementById('mTipo').value,
+      just=document.getElementById('mJust').value, desc=document.getElementById('mDesc').value,
+      min=document.getElementById('mMin').value, com=document.getElementById('mCom').value;
+  var msg=document.getElementById('mMsg');
+  if(!fecha){ msg.textContent='Falta la fecha.'; return; }
+  msg.textContent='Guardando…';
+  google.script.run.withSuccessHandler(function(){ AU_CACHE={}; AG_CACHE={}; cargarAuditAgentes(AU_PER, true); })
+    .withFailureHandler(function(e){ msg.textContent='No se pudo guardar: '+limpiaMsg(e.message); })
+    .guardarIncidenciaManual(AU_CUR_NK, AU_CUR_NOM, fecha, tipo, just, desc, min, com);
+}
+function quitarManual(fecha){
+  var msg=document.getElementById('mMsg'); if(msg) msg.textContent='Quitando…';
+  google.script.run.withSuccessHandler(function(){ AU_CACHE={}; AG_CACHE={}; cargarAuditAgentes(AU_PER, true); })
+    .withFailureHandler(function(e){ if(msg) msg.textContent='No se pudo quitar: '+limpiaMsg(e.message); })
+    .eliminarIncidenciaManual(AU_CUR_NK, fecha);
+}
+
+// ------------- VISTA PEOPLE (incidencias por periodo, export Excel) ---------
+var PEOPLE_DATA=null;
+function isoDate(d){ return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate()); }
+function peopleDefaults(){
+  var d=new Date(), y=d.getFullYear(), m=d.getMonth();
+  document.getElementById('pDesde').value=isoDate(new Date(y,m-1,25));
+  document.getElementById('pHasta').value=isoDate(new Date(y,m,25));
+}
+function cargarPeople(){
+  var desde=document.getElementById('pDesde').value, hasta=document.getElementById('pHasta').value;
+  var box=document.getElementById('pResultado');
+  box.innerHTML='<div class="sub" style="padding:10px 2px">Cargando incidencias…</div>';
+  document.getElementById('pEstado').textContent='Cargando…';
+  google.script.run.withSuccessHandler(function(r){ PEOPLE_DATA=r; document.getElementById('pEstado').textContent=(r.disponible?'Actualizado':'Sin datos'); renderPeople(); })
+    .withFailureHandler(function(e){ document.getElementById('pEstado').textContent='Error'; box.innerHTML=panelError('No se pudo cargar la información.', limpiaMsg(e.message)); })
+    .getVistaPeople(desde, hasta);
+}
+function renderPeople(){
+  var box=document.getElementById('pResultado'); var d=PEOPLE_DATA; if(!d){ box.innerHTML=''; return; }
+  if(!d.disponible){ box.innerHTML=panelError('No se pudieron cargar las incidencias.', d.mensaje||''); return; }
+  var resHtml='<div class="cards">'+
+    card('Total incidencias', d.totalIncidencias, 'del '+d.desde+' al '+d.hasta, 'var(--acc)')+
+    card('Que descuentan', d.totalDescuentan, 'retraso / ausencia / salida ant.', (d.totalDescuentan?'var(--bad)':'var(--ok)'))+
+    card('Colaboradores', d.colaboradores, 'con datos en el periodo', 'var(--acc)')+
+    '</div>';
+  var rrows=(d.resumen||[]).map(function(r){ return '<tr><td>'+agEsc(r.incidencia)+'</td><td class="mono">'+r.total+'</td></tr>'; }).join('');
+  var resTabla=(d.resumen&&d.resumen.length)? '<table style="max-width:440px"><thead><tr><th>Incidencia</th><th>Total</th></tr></thead><tbody>'+rrows+'</tbody></table>' : '<div class="sub">Sin incidencias en el periodo.</div>';
+  var det=d.filas.map(function(f){
+    var marca=(f.entrada||f.salida)?((f.entrada||'—')+' / '+(f.salida||'—')):'—';
+    var ef = f.efecto==='Descuenta'?'<span style="color:var(--bad)">Descuenta</span>':(f.efecto==='No descuenta'?'<span style="color:var(--ok)">No descuenta</span>':'<span style="color:var(--mut)">Informativa</span>');
+    return '<tr><td>'+agEsc(f.colaborador)+'</td><td class="mono">'+agEsc(f.rut||'—')+'</td><td>'+agEsc(f.fecha)+'</td><td>'+agEsc(f.incidencia)+'</td><td class="mono">'+agEsc(f.turnoPlan||'—')+'</td><td class="mono">'+agEsc(marca)+'</td><td class="mono">'+(f.min||0)+'</td><td>'+agEsc(f.origen)+'</td><td>'+ef+'</td><td>'+(f.comentario?agEsc(f.comentario):'<span style="color:var(--mut)">—</span>')+'</td></tr>';
+  }).join('');
+  var detTabla=d.filas.length? '<div class="scroll" style="max-height:520px"><table><thead><tr><th>Colaborador</th><th>RUT</th><th>Fecha</th><th>Incidencia</th><th>Turno plan.</th><th>Marcaje E/S</th><th>Min</th><th>Origen</th><th>Efecto</th><th>Comentario</th></tr></thead><tbody>'+det+'</tbody></table></div>' : '<div class="sub" style="padding:6px 2px">Sin incidencias en el periodo.</div>';
+  box.innerHTML='<div class="panel"><h2>Resumen <span class="pill">'+d.desde+' → '+d.hasta+'</span></h2>'+resHtml+resTabla+'</div>'+
+    '<div class="panel"><h2>Detalle de incidencias <span style="display:flex;gap:6px"><span class="pill">'+d.filas.length+' filas</span><button class="mini" onclick="exportPeopleExcel()">Exportar Excel</button></span></h2>'+detTabla+'</div>';
+}
+function exportPeopleExcel(){
+  if(!PEOPLE_DATA || !PEOPLE_DATA.filas){ return; }
+  try{
+    var wb=XLSX.utils.book_new();
+    var det=[['Colaborador','RUT Colaborador','Fecha','Incidencia','Turno plan.','Marcaje E/S','Min','Origen','Efecto','Comentario']];
+    PEOPLE_DATA.filas.forEach(function(f){ var marca=(f.entrada||f.salida)?((f.entrada||'')+' / '+(f.salida||'')):''; det.push([f.colaborador, f.rut, f.fecha, f.incidencia, f.turnoPlan, marca, f.min, f.origen, f.efecto, f.comentario]); });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(det), 'Detalle');
+    var res=[['Incidencia','Total']]; (PEOPLE_DATA.resumen||[]).forEach(function(r){ res.push([r.incidencia, r.total]); });
+    res.push([]); res.push(['Total incidencias', PEOPLE_DATA.totalIncidencias]); res.push(['Que descuentan', PEOPLE_DATA.totalDescuentan]); res.push(['Colaboradores', PEOPLE_DATA.colaboradores]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(res), 'Resumen');
+    XLSX.writeFile(wb, 'Incidencias_'+PEOPLE_DATA.desde+'_a_'+PEOPLE_DATA.hasta+'.xlsx');
+  }catch(e){ var pe=document.getElementById('pEstado'); if(pe) pe.textContent='Error al exportar'; }
+}
+
+// ------------- VISTA COORDINADOR (un coordinador, periodo selec.) ----------
+var CO_MES=null, CO_CACHE={}, CO_PER='actual', CO_REQ=0;
+function setPeriodoCoord(periodo){
+  if(periodo===CO_PER && CO_CACHE[periodo]) return;
+  CO_PER=periodo;
+  document.getElementById('coPeriodoActual').classList.toggle('on', periodo==='actual');
+  document.getElementById('coPeriodoAnterior').classList.toggle('on', periodo==='anterior');
+  cargarCoordinadores(periodo, true);
+}
+function cargarCoordinadores(periodo, keepSel){
+  periodo = periodo || CO_PER || 'actual'; CO_PER = periodo;
+  var sel=document.getElementById('coViewSel');
+  var prevSel = sel.value || '';                 // preservar SIEMPRE lo elegido
+  if(CO_CACHE[periodo]){ CO_MES=CO_CACHE[periodo]; pintarSelectorCoord(prevSel); return; }
+  var myReq=++CO_REQ;                            // token anti-carrera
+  sel.innerHTML='<option value="">Cargando…</option>';
+  google.script.run.withSuccessHandler(function(r){
+    if(myReq!==CO_REQ) return;                   // respuesta obsoleta: ignorar
+    CO_CACHE[periodo]=r; CO_MES=r; pintarSelectorCoord(prevSel);
+  }).withFailureHandler(function(e){
+    if(myReq!==CO_REQ) return;
+    sel.innerHTML='<option value="">—</option>';
+    document.getElementById('coResultado').innerHTML=panelError('No se pudo cargar la información.', limpiaMsg(e.message));
+  }).getMesCoordinadores(periodo);
+}
+function pintarSelectorCoord(prevSel){
+  var sel=document.getElementById('coViewSel');
+  document.getElementById('coMesLabel').textContent = CO_MES.mesLabel || (CO_PER==='anterior'?'mes anterior':'mes en curso');
+  var lista=CO_MES.coordinadores||[];
+  var actual = prevSel || sel.value || '';
+  var ops='<option value="">— Selecciona un coordinador —</option>';
+  lista.forEach(function(c){ ops+='<option value="'+String(c.coordinador).replace(/"/g,'&quot;')+'">'+c.coordinador+'</option>'; });
+  sel.innerHTML=ops;
+  var soloUno = (ACCESO && ACCESO.esCoordinador);
+  if(soloUno && lista.length){ sel.value=lista[0].coordinador; sel.style.display='none'; renderCoordinador(); return; }
+  sel.style.display='';
+  var existe=false; lista.forEach(function(c){ if(c.coordinador===actual) existe=true; });
+  if(actual && existe){ sel.value=actual; renderCoordinador(); return; }
+  document.getElementById('coResultado').innerHTML='';
+}
+function renderCoordinador(){
+  var nombre=document.getElementById('coViewSel').value;
+  var box=document.getElementById('coResultado');
+  if(!nombre||!CO_MES){ box.innerHTML=''; return; }
+  var c=null; (CO_MES.coordinadores||[]).forEach(function(x){ if(x.coordinador===nombre) c=x; });
+  if(!c){ box.innerHTML='<div class="panel">Sin datos del coordinador este periodo.</div>'; return; }
+  var perLabel = CO_MES.mesLabel || (CO_PER==='anterior'?'mes anterior':'mes en curso');
+  var verCom = !!((CO_MES&&CO_MES.mostrarComision)||{}).coordinadores;
+
+  // Fila 1: resultado economico
+  var cardsTop='<div class="cards">'+
+    card('Ventas del periodo', CLP(c.total), 'Meta '+(c.meta?CLP(c.meta):'—')+' · '+av(c.avance), 'var(--acc)')+
+    card('% de meta', (c.avance==null?'—':Math.round(c.avance*100)+'%'),
+      (c.tramo?('Tramo '+c.tramo+(verCom?(' · comisión '+(c.comisionPct||0)+'%'):'')):''), c.avance!=null&&c.avance>=1?'var(--ok)':'var(--acc)')+
+    card('Comisión', (verCom?CLP(c.comision):'Por definir'), (verCom&&c.tramo?('Tramo '+c.tramo):''), 'var(--ok)')+
+    card('Venta promedio / franja', CLP(c.ventaPromedioFranja||0), 'por franja activa', 'var(--acc)')+
+    '</div>';
+
+  // Fila 2: turnos y franjas trabajadas
+  var cardsTrab='<div class="cards">'+
+    card('Turnos trabajados', (c.turnos==null?'—':c.turnos), 'turnos no libres del '+perLabel, 'var(--noche)')+
+    card('Franjas trabajadas', (c.franjasActivas==null?'—':c.franjasActivas), 'horas activas (sin admin/colación)', 'var(--acc)')+
+    card('Franjas en solitario', (c.franjasSolo==null?'—':c.franjasSolo), 'sin otro coordinador · 100% de la venta', 'var(--dia)')+
+    card('Franjas compartidas', (c.franjasCompartidas==null?'—':c.franjasCompartidas), 'con otro coordinador · venta al 50%', 'var(--excl)')+
+    '</div>';
+
+  // Fila 3: desglose por franja horaria
+  var cardsSec='<div class="cards">'+
+    card('Ventas Diurno', CLP(c.dia), 'franja día', 'var(--dia)')+
+    card('Ventas Nocturno', CLP(c.noche), 'franja noche', 'var(--noche)')+
+    '</div>';
+
+  // Venta promedio por franja SEGÚN TIPO DE TURNO (así se ve cómo varía el rinde por turno)
+  var td=c.turnosDetalle||[];
+  var trows=td.map(function(t){
+    return '<tr><td>'+turnoLabel(t.start,t.end)+'</td><td class="mono">'+t.turnos+'</td><td class="mono">'+t.franjas+
+      '</td><td class="mono">'+CLP(t.venta)+'</td><td class="mono"><b>'+CLP(t.promedio)+'</b></td></tr>';
+  });
+  var turnoTabla = td.length
+    ? '<div class="scroll"><table><thead><tr><th>Tipo de turno</th><th>Turnos</th><th>Franjas</th><th>Venta atribuida</th><th>Prom. / franja</th></tr></thead><tbody>'+trows.join('')+'</tbody></table></div>'
+    : '<div class="sub" style="padding:6px 2px">Sin turnos en el periodo.</div>';
+  var seccionTurnos='<div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">'+
+    '<div class="kick">VENTA PROMEDIO POR FRANJA SEGÚN TURNO</div>'+
+    '<div class="sub" style="margin:2px 0 10px">Cuánto rinde cada tipo de turno del coordinador: la venta que se le atribuye y el promedio por franja activa. La comisión total es un % sobre la suma de estas ventas, así se ve qué turnos aportan más comisión.</div>'+
+    turnoTabla+'</div>';
+
+  // Detalle de ventas atribuidas al coordinador (con total)
+  var det=c.ventasDetalle||[];
+  var totVenta=det.reduce(function(s,v){return s+(v.montoVenta||0);},0);
+  var totCoord=det.reduce(function(s,v){return s+(v.montoCoord||0);},0);
+  var fv=det.map(function(v){
+    var franja = v.nCoords>1 ? ('Compartida (1/'+v.nCoords+')') : 'Solo';
+    var fc = v.nCoords>1 ? 'var(--excl)' : 'var(--dia)';
+    var hh = (v.hora==null?'—':(v.hora<10?'0':'')+v.hora+':00');
+    return '<tr><td>'+agEsc(v.fecha)+'</td><td class="mono">'+hh+'</td><td>'+agEsc(v.producto)+'</td><td>'+agEsc(v.vendedor||'—')+
+      '</td><td class="mono">'+CLP(v.montoVenta)+'</td><td class="mono"><b>'+(verCom?CLP(v.montoCoord):'—')+'</b></td>'+
+      '<td style="color:'+fc+'">'+franja+'</td></tr>';
+  });
+  var totalRow='<tr class="total"><td>Total</td><td></td><td></td><td class="sub">'+det.length+' ventas</td>'+
+    '<td class="mono">'+CLP(totVenta)+'</td><td class="mono">'+(verCom?CLP(totCoord):'Por definir')+'</td><td></td></tr>';
+  var notaDet='Cada fila es una venta ocurrida en una franja que el coordinador tenía activa. '+
+    '<b>Monto venta</b> es el total de la reserva; <b>tu comisión (base)</b> es la parte que se le atribuye '+
+    '(la venta se reparte 50/50 cuando otro coordinador cubre la misma hora). El vendedor puede ser un agente u otro rol.';
+  var detVentas=agDet('Detalle de ventas atribuidas', det.length,
+    agTabla(['Fecha','Hora','Servicio','Vendedor','Monto venta','Tu comisión (base)','Franja'], fv, totalRow), notaDet);
+
+  box.innerHTML='<div class="panel"><div class="kick">'+agEsc(c.coordinador).toUpperCase()+' · '+agEsc(perLabel).toUpperCase()+'</div>'+
+    cardsTop+cardsTrab+cardsSec+seccionTurnos+detVentas+
+    '<div class="sub" style="margin-top:10px">La comisión del coordinador se calcula sobre las ventas de sus franjas activas (turno menos horas administrativas/colación), con reparto 50/50 cuando hay otro coordinador en la misma hora.</div></div>';
+}
+
+function renderDia(){
+  if(!DATA||!DATA.serieDiaria)return;
+  var s=DATA.serieDiaria;
+  var labels=s.map(function(x){return x.fecha.substring(8,10)+'/'+x.fecha.substring(5,7);});
+  if(chartDia)chartDia.destroy();
+  chartDia=new Chart(document.getElementById('chartDia'),{type:'line',
+    data:{labels:labels,datasets:[{label:'Ventas',data:s.map(function(x){return x.monto}),
+      borderColor:'#6c2eb9',backgroundColor:'rgba(108,46,185,.12)',borderWidth:2,
+      pointRadius:2,pointBackgroundColor:'#6c2eb9',tension:.25,fill:true}]},
+    options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){
+      var d=s[c.dataIndex]; return ['Ventas: '+CLP(c.parsed.y), d.n+' viajes'];}}}},
+      scales:{x:{grid:{display:false},ticks:{color:'#8c84a3',font:{size:10},maxRotation:0,autoSkip:true,maxTicksLimit:15}},
+        y:{grid:{color:'#ece7f4'},ticks:{color:'#8c84a3',callback:function(v){return '$'+(v/1000000)+'M'}}}}}});
+}
+
+function renderChart(){
+  if(!DATA)return;
+  var labels=DATA.franjas.map(function(f){return p2(f.hora)+'h';});
+  var ds=[{label:'Compartida',data:DATA.franjas.map(function(f){return f.comp}),backgroundColor:'#6c2eb9'},
+          {label:'Exclusiva',data:DATA.franjas.map(function(f){return f.excl}),backgroundColor:'#f2495c'}];
+  if(chart)chart.destroy();
+  chart=new Chart(document.getElementById('chart'),{type:'bar',data:{labels:labels,datasets:ds},
+    options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return c.dataset.label+': '+CLP(c.parsed.y)}}}},
+      scales:{x:{stacked:true,grid:{display:false},ticks:{color:'#8c84a3',font:{size:10}}},
+        y:{stacked:true,grid:{color:'#ece7f4'},ticks:{color:'#8c84a3',callback:function(v){return '$'+(v/1000)+'k'}}}}}});
+}
+
+function renderSemana(){
+  if(!DATA)return;
+  var s=DATA.semana, labels=s.map(function(x){return x.dia;});
+  if(chartSemana)chartSemana.destroy();
+  chartSemana=new Chart(document.getElementById('chartSemana'),{type:'bar',
+    data:{labels:labels,datasets:[{label:'Promedio',data:s.map(function(x){return x.promedio}),backgroundColor:'#6c2eb9',borderRadius:4}]},
+    options:{responsive:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){
+      var d=s[c.dataIndex]; return ['Promedio: '+CLP(c.parsed.y),'Total: '+CLP(d.total)+'  ·  '+d.dias+' días  ·  '+d.n+' viajes'];}}}},
+      scales:{x:{grid:{display:false},ticks:{color:'#8c84a3'}},
+        y:{grid:{color:'#ece7f4'},ticks:{color:'#8c84a3',callback:function(v){return '$'+(v/1000)+'k'}}}}}});
+}
+
+function renderMetaCoord(){
+  var meta=DATA.metas.metaCoordinador||0;
+  var rows=(DATA.coordinadores||[]).map(function(c){return {n:c.coordinador,v:c.total};});
+  var el=document.getElementById('chartMetaCoord');
+  if(!rows.length||!meta){ if(chartMetaCoord){chartMetaCoord.destroy();chartMetaCoord=null;} el.style.display='none'; return; }
+  rows.sort(function(a,b){return b.v-a.v;});
+  el.style.display='block';
+  if(chartMetaCoord)chartMetaCoord.destroy();
+  chartMetaCoord=new Chart(el,{type:'bar',
+    data:{labels:rows.map(function(r){return r.n}),
+      datasets:[{label:'Total',data:rows.map(function(r){return r.v}),
+        backgroundColor:rows.map(function(r){return r.v>=meta?'#16b79a':'#b98be8'})},
+        {label:'Meta',data:rows.map(function(){return meta}),type:'line',borderColor:'#6c2eb9',
+        borderWidth:2,borderDash:[5,4],pointRadius:0,fill:false}]},
+    options:{indexAxis:'y',responsive:true,plugins:{legend:{display:false},
+      tooltip:{callbacks:{label:function(c){return c.dataset.label+': '+CLP(c.parsed.x)}}}},
+      scales:{x:{grid:{color:'#ece7f4'},ticks:{color:'#8c84a3',callback:function(v){return '$'+(v/1000000)+'M'}}},
+              y:{grid:{display:false},ticks:{color:'#8c84a3',font:{size:11}}}}}});
+}
+
+var MET_SEG='total';
+function setSegMeta(s){
+  if(s===MET_SEG) return;
+  MET_SEG=s;
+  ['total','servicio','round'].forEach(function(k){
+    document.getElementById('seg'+k.charAt(0).toUpperCase()+k.slice(1)).classList.toggle('on', k===s); });
+  renderMeta();
+}
+function leyendaMeta(meta){
+  var L=document.getElementById('metaLegend'); if(!L) return;
+  function it(c,t){ return '<span><span class="dot" style="background:'+c+'"></span>'+t+'</span>'; }
+  var h='';
+  if(MET_SEG==='servicio')   h=it('#6c2eb9','Compartida')+it('#f2495c','Exclusiva');
+  else if(MET_SEG==='round') h=it('#b98be8','One way')+it('#6c2eb9','Ida y vuelta (round)');
+  else                       h=it('#16b79a','En meta')+it('#b98be8','Bajo la meta');
+  if(meta) h+=it('#241046','Meta por agente ('+CLP(meta)+')');
+  L.innerHTML=h;
+}
+function renderMeta(){
+  var meta=DATA.metas.metaAgente||0;
+  var rows=DATA.ejecutivos.map(function(e){
+    var mr=e.montoRound||0;
+    return {n:e.nombre, v:e.ventas, comp:e.comp||0, excl:e.excl||0, round:mr, one:(e.ventas-mr)};
+  });
+  var el=document.getElementById('chartMeta');
+  if(!rows.length){ if(chartMeta){chartMeta.destroy();chartMeta=null;} el.style.display='none'; leyendaMeta(0); return; }
+  rows.sort(function(a,b){return b.v-a.v;});
+  el.style.display='block';
+  leyendaMeta(meta);
+  var stacked=(MET_SEG!=='total'), ds;
+  if(MET_SEG==='servicio'){
+    ds=[{label:'Compartida',data:rows.map(function(r){return r.comp}),backgroundColor:'#6c2eb9',stack:'v'},
+        {label:'Exclusiva', data:rows.map(function(r){return r.excl}),backgroundColor:'#f2495c',stack:'v'}];
+  } else if(MET_SEG==='round'){
+    ds=[{label:'One way',      data:rows.map(function(r){return r.one}),  backgroundColor:'#b98be8',stack:'v'},
+        {label:'Ida y vuelta', data:rows.map(function(r){return r.round}),backgroundColor:'#6c2eb9',stack:'v'}];
+  } else {
+    ds=[{label:'Ventas',data:rows.map(function(r){return r.v}),
+      backgroundColor:rows.map(function(r){return (meta&&r.v>=meta)?'#16b79a':'#b98be8'})}];
+  }
+  if(meta) ds.push({label:'Meta',data:rows.map(function(){return meta}),type:'line',borderColor:'#241046',
+    borderWidth:2,borderDash:[5,4],pointRadius:0,fill:false,stack:'meta'});
+  if(chartMeta)chartMeta.destroy();
+  chartMeta=new Chart(el,{type:'bar',
+    data:{labels:rows.map(function(r){return r.n}),datasets:ds},
+    options:{indexAxis:'y',responsive:true,plugins:{legend:{display:false},
+      tooltip:{callbacks:{label:function(c){return c.dataset.label+': '+CLP(c.parsed.x);},
+        footer:function(items){ var r=rows[items[0].dataIndex];
+          return stacked? ('Total: '+CLP(r.v)) : (meta? ('Avance: '+Math.round(r.v/meta*100)+'%') : ''); }}}},
+      scales:{x:{stacked:stacked,grid:{color:'#ece7f4'},ticks:{color:'#8c84a3',callback:function(v){return '$'+(v/1000000)+'M'}}},
+              y:{stacked:stacked,grid:{display:false},ticks:{color:'#8c84a3',font:{size:11}}}}}});
+}
+
+function leerPlanilla(inp){
+  var f=inp.files&&inp.files[0]; if(!f) return;
+  var msg=document.getElementById('maeMsg'), btn=document.getElementById('btnMae');
+  msg.textContent='Leyendo '+f.name+'…'; btn.disabled=true;
+  var rd=new FileReader();
+  rd.onload=function(e){
+    try{
+      var wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});
+      var wsName=wb.SheetNames.indexOf('Trabajador')>=0?'Trabajador':wb.SheetNames[0];
+      var aoa=XLSX.utils.sheet_to_json(wb.Sheets[wsName],{header:1,defval:''});
+      var hr=-1;
+      for(var i=0;i<Math.min(12,aoa.length);i++){
+        var fila=aoa[i].map(function(x){return String(x).trim();});
+        if(fila.indexOf('Nombre')>=0 && fila.indexOf('Primer Apellido')>=0){hr=i;break;}
+      }
+      if(hr<0) throw new Error('No encontré la fila de encabezados (Nombre / Primer Apellido) en la hoja "'+wsName+'".');
+      var H=aoa[hr].map(function(x){return String(x).trim();});
+      function ci(n){return H.indexOf(n);}
+      var iN=ci('Nombre'), iA1=ci('Primer Apellido'), iA2=ci('Segundo Apellido'),
+          iEs=ci('Especialidad'), iSu=ci('Supervisor');
+      var regs=[];
+      for(var r=hr+1;r<aoa.length;r++){
+        var nom=String(aoa[r][iN]||'').trim(), a1=String(aoa[r][iA1]||'').trim();
+        if(!nom||!a1) continue;
+        regs.push({nombre:nom, ap1:a1, ap2:iA2>=0?String(aoa[r][iA2]||'').trim():'',
+          especialidad:iEs>=0?String(aoa[r][iEs]||'').trim():'', supervisor:iSu>=0?String(aoa[r][iSu]||'').trim():''});
+      }
+      if(!regs.length) throw new Error('La planilla no trae colaboradores con Nombre y Primer Apellido.');
+      msg.textContent='Sincronizando '+regs.length+' colaboradores…';
+      google.script.run.withSuccessHandler(function(res){
+        btn.disabled=false; inp.value='';
+        msg.textContent='✓ Sincronizado: '+res.total+' colaboradores ('+res.nuevos+' nuevos) · '+res.actualizado;
+        cargar();
+      }).withFailureHandler(function(err){
+        btn.disabled=false; inp.value='';
+        msg.textContent='Error: '+err.message;
+      }).sincronizarMaestros(regs);
+    }catch(ex){ btn.disabled=false; inp.value=''; msg.textContent='Error al leer el archivo: '+ex.message; }
+  };
+  rd.onerror=function(){ btn.disabled=false; msg.textContent='No se pudo leer el archivo.'; };
+  rd.readAsArrayBuffer(f);
+}
+
+function actualizarPerf(){
+  var b=document.getElementById('btnPerf'); b.disabled=true; b.textContent='Descargando…';
+  google.script.run.withSuccessHandler(function(r){
+    b.disabled=false; b.textContent='Actualizar desde Tableau';
+    document.getElementById('perfStamp').textContent='actualizado '+r.actualizado+' · '+r.filas+' filas';
+    cargar();
+  }).withFailureHandler(function(e){
+    b.disabled=false; b.textContent='Actualizar desde Tableau';
+    document.getElementById('errbox').innerHTML=panelError('No se pudo actualizar desde Tableau.', limpiaMsg(e.message));
+  }).actualizarPerformance();
+}
+
+function descargarBase64(b64, name, mime){
+  var bin=atob(b64), len=bin.length, bytes=new Uint8Array(len);
+  for(var i=0;i<len;i++) bytes[i]=bin.charCodeAt(i);
+  var blob=new Blob([bytes],{type:mime||'application/pdf'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove();
+}
+
+function pdfResumen(){
+  var b=document.getElementById('btnResumen'); b.disabled=true;
+  document.getElementById('pdfMsg').textContent='Generando PDF…';
+  google.script.run.withSuccessHandler(function(r){
+    b.disabled=false; document.getElementById('pdfMsg').textContent='✓ Descargado: '+r.name;
+    descargarBase64(r.b64, r.name);
+  }).withFailureHandler(function(e){
+    b.disabled=false; document.getElementById('pdfMsg').textContent='Error: '+e.message;
+  }).generarResumenDesempenoPDF(params());
+}
+
+function pdfDetalle(){
+  var b=document.getElementById('btnDetalle'); b.disabled=true;
+  document.getElementById('pdfMsg').textContent='Generando PDF…';
+  var ag=document.getElementById('agSel').value||null;
+  google.script.run.withSuccessHandler(function(r){
+    b.disabled=false; document.getElementById('pdfMsg').textContent='✓ Descargado: '+r.name;
+    descargarBase64(r.b64, r.name);
+  }).withFailureHandler(function(e){
+    b.disabled=false; document.getElementById('pdfMsg').textContent='Error: '+e.message;
+  }).generarDetalleDesempenoPDF(params(), ag);
+}
+
+function bajar(tipo){
+  document.getElementById('estado').textContent='Generando CSV…';
+  google.script.run.withSuccessHandler(function(csv){
+    document.getElementById('estado').textContent='Actualizado';
+    var blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+    var a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download='ventas_'+tipo+'_'+params().from+'_'+params().to+'.csv';a.click();
+  }).withFailureHandler(function(e){document.getElementById('estado').textContent='Error';
+    document.getElementById('errbox').innerHTML=panelError('No se pudo exportar el CSV.', limpiaMsg(e.message));}).exportCSV(tipo,params());
+}
+
+document.getElementById('cfgPeriodo').value=ymHoy();
+iniciar();
+</script>
+</body>
+</html>
